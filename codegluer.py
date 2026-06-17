@@ -17,6 +17,7 @@ import logging
 
 # Module-level logger – lets host applications control output
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())   # <-- NEW: suppress logging by default
 
 SEPARATOR_CHAR = "="
 SEPARATOR_LENGTH = 70
