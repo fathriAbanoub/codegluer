@@ -31,15 +31,21 @@ echo -e "${YELLOW}➜ Removing installed files...${NC}"
 
 # --- New CodeGluer files ---
 remove_if_exists "$HOME/.local/bin/codegluer"
-remove_if_exists "$HOME/.local/share/nautilus/scripts/Glue Code Files"
-remove_if_exists "$HOME/.local/share/nemo/actions/codegluer.nemo_action"
-remove_if_exists "$HOME/.local/share/nemo/actions/codegluer-nemo.sh"
+remove_if_exists "$HOME/.local/share/nautilus/scripts/Glue Code Files (Plain)"
+remove_if_exists "$HOME/.local/share/nautilus/scripts/Glue Code Files (Markdown)"
+remove_if_exists "$HOME/.local/share/nemo/actions/codegluer-plain.nemo_action"
+remove_if_exists "$HOME/.local/share/nemo/actions/codegluer-markdown.nemo_action"
+remove_if_exists "$HOME/.local/share/nemo/actions/codegluer-nemo-plain.sh"
+remove_if_exists "$HOME/.local/share/nemo/actions/codegluer-nemo-markdown.sh"
 
 # --- Legacy Code Combiner files (for upgraders) ---
 remove_if_exists "$HOME/.local/bin/code-combiner"
 remove_if_exists "$HOME/.local/share/nautilus/scripts/Combine Code Files"
+remove_if_exists "$HOME/.local/share/nautilus/scripts/Glue Code Files"   # old single entry
 remove_if_exists "$HOME/.local/share/nemo/actions/code-combiner.nemo_action"
 remove_if_exists "$HOME/.local/share/nemo/actions/code-combiner-nemo.sh"
+remove_if_exists "$HOME/.local/share/nemo/actions/codegluer.nemo_action" # old single entry
+remove_if_exists "$HOME/.local/share/nemo/actions/codegluer-nemo.sh"     # old single entry
 
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════${NC}"

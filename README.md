@@ -35,10 +35,11 @@ The installer will:
 1. Open your file manager (**Nautilus** or **Nemo**)
 2. Select the code files you want to glue (Ctrl+Click or Shift+Click)
 3. Right-click on the selection
-4. Choose **Scripts → Glue Code Files**
-5. A `glued_code.txt` file will appear in the same directory ✅
+4. Choose **Scripts → Glue Code Files (Plain)** or **Glue Code Files (Markdown)**
+5. A `glued_code.txt` or `glued_code.md` file will appear in the same directory ✅
 
-> **Note:** In Nautilus, scripts appear under **Right-Click → Scripts → Glue Code Files**.
+> **Note:** In Nautilus, scripts appear under **Right-Click → Scripts**.
+> **Plain** gives the classic separator markers; **Markdown** gives pasteable code blocks.
 
 ##  Usage (Terminal)
 
