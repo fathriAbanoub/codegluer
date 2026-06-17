@@ -30,44 +30,33 @@ class TestHelpers:
         assert codegluer.detect_language("README.md") == "markdown"
 
     def test_sanitize_filename_for_markdown(self):
-        # Normal filename
         assert codegluer.sanitize_filename_for_markdown("test.py") == "test.py"
-        # Backticks -> HTML entity
         assert codegluer.sanitize_filename_for_markdown("test`file.py") == "test&#96;file.py"
-        # Newlines -> spaces
         assert codegluer.sanitize_filename_for_markdown("test\nfile.py") == "test file.py"
-        # Multiple
         assert codegluer.sanitize_filename_for_markdown("test`\nfile.py") == "test&#96; file.py"
 
     def test_build_markdown_section(self):
-        # Basic case
         section = codegluer.build_markdown_section("test.py", "print('hello')")
         assert "### `test.py`" in section
         assert "```python" in section
         assert "print('hello')" in section
         assert section.count("```") == 2
 
-        # Edge: content contains backticks
         content_with_backticks = "```\nsome code\n```"
         section = codegluer.build_markdown_section("test.py", content_with_backticks)
-        # Should use a fence longer than 3 because content has 3 backticks
         assert "````python" in section or "`````python" in section
         assert "some code" in section
 
-        # Edge: content has a very long run of backticks
         long_run = "`" * 100 + "code"
         section = codegluer.build_markdown_section("test.py", long_run)
-        # Fence should be at least 101
         assert "`" * 101 in section
 
-        # NEW: filename with backticks and newlines
         tricky_filename = "test`file\nwith_newline.py"
         section = codegluer.build_markdown_section(tricky_filename, "content")
         safe = codegluer.sanitize_filename_for_markdown(tricky_filename)
         assert f"### `{safe}`" in section
-        # Ensure backticks are escaped and newlines removed
         assert "&#96;" in section
-        assert "with_newline" in section  # newline replaced with space
+        assert "with_newline" in section
 
 
 class TestGlueFiles:
@@ -210,7 +199,7 @@ class TestGlueFiles:
 class TestCLI:
     def test_cli_basic_plain(self, tmp_dir, sample_files):
         files = list(sample_files.values())
-        script_path = Path(__file__).parent.parent / "codegluer.py"
+        script_path = Path(__file__).parent.parent / "codegluer.py"  # FIXED
         cmd = [sys.executable, str(script_path)] + [str(f) for f in files]
         result = subprocess.run(cmd, capture_output=True, text=True)
         assert result.returncode == 0
@@ -223,7 +212,7 @@ class TestCLI:
 
     def test_cli_markdown_format(self, tmp_dir, sample_files):
         files = list(sample_files.values())
-        script_path = Path(__file__).parent.parent / "codegluer.py"
+        script_path = Path(__file__).parent.parent / "codegluer.py"  # FIXED
         cmd = [
             sys.executable, str(script_path),
             "--format", "markdown",
@@ -239,7 +228,7 @@ class TestCLI:
 
     def test_cli_with_output(self, tmp_dir, sample_files):
         files = list(sample_files.values())
-        script_path = Path(__file__).parent.parent / "codegluer.py"
+        script_path = Path(__file__).parent.parent / "codegluer.py"  # FIXED
         custom = tmp_dir / "my_output.txt"
         cmd = [sys.executable, str(script_path), "-o", str(custom)] + [str(f) for f in files]
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -247,15 +236,15 @@ class TestCLI:
         assert custom.exists()
 
     def test_cli_error_missing_file(self, tmp_dir):
-        script_path = Path(__file__).parent.parent / "codegluer.py"
+        script_path = Path(__file__).parent.parent / "codegluer.py"  # FIXED
         missing = tmp_dir / "does_not_exist.txt"
         cmd = [sys.executable, str(script_path), str(missing)]
         result = subprocess.run(cmd, capture_output=True, text=True)
         assert result.returncode != 0
-        assert "Error: No files could be read." in result.stderr
+        assert "Error: No files could be read after filtering." in result.stderr  # UPDATED
 
     def test_cli_help(self, tmp_dir):
-        script_path = Path(__file__).parent.parent / "codegluer.py"
+        script_path = Path(__file__).parent.parent / "codegluer.py"  # FIXED
         cmd = [sys.executable, str(script_path), "-h"]
         result = subprocess.run(cmd, capture_output=True, text=True)
         assert result.returncode == 0
@@ -352,3 +341,156 @@ class TestStress:
         total_size = sum(p.stat().st_size for p in files)
         output_size = output.stat().st_size
         assert output_size > total_size
+
+
+# ============================================================================
+# New tests for advanced features (recursion, .gitignore, filtering, relative display names)
+# ============================================================================
+
+class TestAdvancedCollection:
+    def test_recursive_directory(self, tmp_dir):
+        (tmp_dir / "sub").mkdir()
+        (tmp_dir / "sub" / "a.txt").write_text("a")
+        (tmp_dir / "b.txt").write_text("b")
+        
+        files = codegluer.collect_files([str(tmp_dir)], recursive=True)
+        assert len(files) == 2
+        assert {f.name for f in files} == {"a.txt", "b.txt"}
+
+    def test_include_exclude_with_pathspec(self, tmp_dir):
+        if not codegluer.HAS_PATHSPEC:
+            pytest.skip("pathspec not installed")
+            
+        (tmp_dir / "src").mkdir()
+        (tmp_dir / "src" / "main.py").write_text("")
+        (tmp_dir / "src" / "test.js").write_text("")
+        (tmp_dir / "dist").mkdir()
+        (tmp_dir / "dist" / "bundle.js").write_text("")
+        
+        files = codegluer.collect_files(
+            [str(tmp_dir)], recursive=True,
+            include_patterns=["**/*.py", "**/*.js"],
+            exclude_patterns=["dist/"]
+        )
+        
+        assert len(files) == 2
+        assert {f.name for f in files} == {"main.py", "test.js"}
+
+    def test_include_exclude_fallback_fnmatch(self, tmp_dir):
+        (tmp_dir / "src").mkdir()
+        (tmp_dir / "src" / "main.py").write_text("")
+        (tmp_dir / "src" / "test.js").write_text("")
+        (tmp_dir / "dist").mkdir()
+        (tmp_dir / "dist" / "bundle.js").write_text("")
+        
+        original_has = codegluer.HAS_PATHSPEC
+        codegluer.HAS_PATHSPEC = False
+        try:
+            files = codegluer.collect_files(
+                [str(tmp_dir)], recursive=True,
+                include_patterns=["*.py", "*.js"],
+                exclude_patterns=["dist/*"]
+            )
+        finally:
+            codegluer.HAS_PATHSPEC = original_has
+        
+        assert len(files) == 2
+        assert {f.name for f in files} == {"main.py", "test.js"}
+
+    def test_gitignore_respect_anchored(self, tmp_dir):
+        if not codegluer.HAS_PATHSPEC:
+            pytest.skip("pathspec not installed")
+            
+        (tmp_dir / ".gitignore").write_text("/build/\n")
+        (tmp_dir / "build").mkdir()
+        (tmp_dir / "build" / "out.txt").write_text("ignore me")
+        
+        (tmp_dir / "sub").mkdir()
+        (tmp_dir / "sub" / "build").mkdir()
+        (tmp_dir / "sub" / "build" / "keep.txt").write_text("keep me")
+        
+        files = codegluer.collect_files(
+            [str(tmp_dir)], recursive=True, respect_gitignore=True
+        )
+        
+        file_names = {f.name for f in files}
+        assert "keep.txt" in file_names
+        assert "out.txt" not in file_names
+
+    def test_gitignore_respect_nested(self, tmp_dir):
+        if not codegluer.HAS_PATHSPEC:
+            pytest.skip("pathspec not installed")
+            
+        (tmp_dir / ".gitignore").write_text("*.log\n")
+        (tmp_dir / "sub").mkdir()
+        (tmp_dir / "sub" / ".gitignore").write_text("*.tmp\n")
+        
+        (tmp_dir / "a.log").write_text("log")
+        (tmp_dir / "sub" / "b.tmp").write_text("tmp")
+        (tmp_dir / "sub" / "c.txt").write_text("text")
+        
+        files = codegluer.collect_files(
+            [str(tmp_dir)], recursive=True, respect_gitignore=True
+        )
+        
+        file_names = {f.name for f in files}
+        assert "c.txt" in file_names
+        assert "a.log" not in file_names
+        assert "b.tmp" not in file_names
+
+    def test_display_names_are_relative(self, tmp_dir):
+        (tmp_dir / "src").mkdir()
+        (tmp_dir / "src" / "utils.py").write_text("pass")
+        
+        out_path = tmp_dir / "out.txt"
+        codegluer.glue_files([str(tmp_dir / "src")], output_path=str(out_path), recursive=True)
+        content = out_path.read_text()
+        assert "BEGIN FILE: utils.py" in content 
+        
+        out_path2 = tmp_dir / "out2.txt"
+        codegluer.glue_files([str(tmp_dir)], output_path=str(out_path2), recursive=True)
+        content2 = out_path2.read_text()
+        assert "BEGIN FILE: src/utils.py" in content2
+
+    def test_exclude_prunes_directories(self, tmp_dir):
+        (tmp_dir / "node_modules").mkdir()
+        (tmp_dir / "node_modules" / "deep").mkdir()
+        (tmp_dir / "node_modules" / "deep" / "file.js").write_text("ignore")
+        (tmp_dir / "src").mkdir()
+        (tmp_dir / "src" / "main.js").write_text("keep")
+        
+        files = codegluer.collect_files(
+            [str(tmp_dir)], recursive=True,
+            exclude_patterns=["node_modules/"]
+        )
+        assert len(files) == 1
+        assert files[0].name == "main.js"
+
+    def test_include_filter_works_with_recursion(self, tmp_dir):
+        (tmp_dir / "a.py").write_text("")
+        (tmp_dir / "b.js").write_text("")
+        (tmp_dir / "sub").mkdir()
+        (tmp_dir / "sub" / "c.py").write_text("")
+        
+        files = codegluer.collect_files(
+            [str(tmp_dir)], recursive=True,
+            include_patterns=["*.py"]
+        )
+        assert len(files) == 2
+        assert {f.name for f in files} == {"a.py", "c.py"}
+
+    def test_relative_display_names_with_multiple_inputs(self, tmp_dir):
+        (tmp_dir / "project1").mkdir()
+        (tmp_dir / "project1" / "main.py").write_text("")
+        (tmp_dir / "project2").mkdir()
+        (tmp_dir / "project2" / "utils.py").write_text("")
+        
+        out_path = tmp_dir / "out.txt"
+        codegluer.glue_files(
+            [str(tmp_dir / "project1"), str(tmp_dir / "project2")],
+            output_path=str(out_path),
+            recursive=True
+        )
+        content = out_path.read_text()
+        assert "BEGIN FILE: project1/main.py" in content
+        assert "BEGIN FILE: project2/utils.py" in content
