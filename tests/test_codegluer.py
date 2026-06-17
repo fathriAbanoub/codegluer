@@ -29,6 +29,16 @@ class TestHelpers:
         assert codegluer.detect_language("unknown.xyz") == ""
         assert codegluer.detect_language("README.md") == "markdown"
 
+    def test_sanitize_filename_for_markdown(self):
+        # Normal filename
+        assert codegluer.sanitize_filename_for_markdown("test.py") == "test.py"
+        # Backticks -> HTML entity
+        assert codegluer.sanitize_filename_for_markdown("test`file.py") == "test&#96;file.py"
+        # Newlines -> spaces
+        assert codegluer.sanitize_filename_for_markdown("test\nfile.py") == "test file.py"
+        # Multiple
+        assert codegluer.sanitize_filename_for_markdown("test`\nfile.py") == "test&#96; file.py"
+
     def test_build_markdown_section(self):
         # Basic case
         section = codegluer.build_markdown_section("test.py", "print('hello')")
@@ -42,7 +52,6 @@ class TestHelpers:
         section = codegluer.build_markdown_section("test.py", content_with_backticks)
         # Should use a fence longer than 3 because content has 3 backticks
         assert "````python" in section or "`````python" in section
-        # Should still contain the content
         assert "some code" in section
 
         # Edge: content has a very long run of backticks
@@ -50,6 +59,15 @@ class TestHelpers:
         section = codegluer.build_markdown_section("test.py", long_run)
         # Fence should be at least 101
         assert "`" * 101 in section
+
+        # NEW: filename with backticks and newlines
+        tricky_filename = "test`file\nwith_newline.py"
+        section = codegluer.build_markdown_section(tricky_filename, "content")
+        safe = codegluer.sanitize_filename_for_markdown(tricky_filename)
+        assert f"### `{safe}`" in section
+        # Ensure backticks are escaped and newlines removed
+        assert "&#96;" in section
+        assert "with_newline" in section  # newline replaced with space
 
 
 class TestGlueFiles:
@@ -126,6 +144,12 @@ class TestGlueFiles:
         )
         assert out == str(custom)
         assert custom.exists()
+
+    def test_invalid_output_format(self, tmp_dir, sample_files):
+        files = list(sample_files.values())
+        with pytest.raises(ValueError) as exc:
+            codegluer.glue_files(files, output_format="invalid")
+        assert "Invalid output_format" in str(exc.value)
 
     def test_empty_file(self, tmp_dir):
         empty = tmp_dir / "empty.txt"

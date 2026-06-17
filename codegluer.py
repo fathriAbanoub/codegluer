@@ -69,6 +69,19 @@ def detect_language(filename):
     return EXT_TO_LANG.get(ext, "")
 
 
+def sanitize_filename_for_markdown(filename):
+    """
+    Sanitize a filename for safe embedding in a Markdown heading.
+    - Replace backticks with HTML entity &#96; to avoid breaking code spans.
+    - Replace newlines with spaces (headings cannot contain newlines).
+    """
+    # Replace backticks
+    sanitized = filename.replace('`', '&#96;')
+    # Replace newlines (both \n and \r) with spaces
+    sanitized = sanitized.replace('\n', ' ').replace('\r', ' ')
+    return sanitized
+
+
 class CodeGluerError(Exception):
     """Base exception for CodeGluer."""
     pass
@@ -108,9 +121,10 @@ def build_footer(filename):
 
 
 def build_markdown_section(filename, content):
-    """Build a markdown section for a file, safely handling inner backticks."""
+    """Build a markdown section for a file, safely handling inner backticks and escaping filename."""
     lang = detect_language(filename)
-    heading = f"### `{filename}`"
+    safe_filename = sanitize_filename_for_markdown(filename)
+    heading = f"### `{safe_filename}`"
 
     # Find the longest run of backticks in the content
     max_backticks = 0
@@ -143,10 +157,15 @@ def glue_files(file_paths, output_path=None, output_format="plain"):
     Returns:
         A tuple of (path to the created output file, count of successfully glued files).
     Raises:
+        ValueError: if output_format is not "plain" or "markdown".
         NoFilesError: if file_paths is empty.
         NoReadableFilesError: if none of the files could be read.
         OutputWriteError: if the output file could not be written.
     """
+    # Validate output_format
+    if output_format not in ("plain", "markdown"):
+        raise ValueError(f"Invalid output_format: {output_format!r}. Must be 'plain' or 'markdown'.")
+
     if not file_paths:
         raise NoFilesError("No files provided.")
 
