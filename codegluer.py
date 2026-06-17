@@ -47,10 +47,20 @@ def sanitize_filename_for_markdown(filename):
     return sanitized
 
 
-class CodeGluerError(Exception): pass
-class NoFilesError(CodeGluerError): pass
-class NoReadableFilesError(CodeGluerError): pass
-class OutputWriteError(CodeGluerError): pass
+class CodeGluerError(Exception):
+    pass
+
+
+class NoFilesError(CodeGluerError):
+    pass
+
+
+class NoReadableFilesError(CodeGluerError):
+    pass
+
+
+class OutputWriteError(CodeGluerError):
+    pass
 
 
 def build_header(filename):
@@ -115,9 +125,16 @@ def _build_filter_spec(patterns):
     if not patterns:
         return None
     if HAS_PATHSPEC:
-        return pathspec.PathSpec.from_lines('gitignore', patterns)  # updated pattern name
+        return pathspec.PathSpec.from_lines('gitignore', patterns)
     # Fallback for fnmatch: strip trailing slashes so "node_modules/" matches "node_modules"
     return [p.rstrip('/') for p in patterns]
+
+
+def _fnmatch_check(path_str, pattern):
+    """Fallback fnmatch check. If pattern has no slashes, match against basename."""
+    if '/' not in pattern:
+        return fnmatch.fnmatch(os.path.basename(path_str), pattern)
+    return fnmatch.fnmatch(path_str, pattern)
 
 
 def _matches_filters(rel_path_str, include_spec, exclude_spec):
@@ -126,14 +143,14 @@ def _matches_filters(rel_path_str, include_spec, exclude_spec):
             if exclude_spec.match_file(rel_path_str):
                 return False
         else:
-            if any(fnmatch.fnmatch(rel_path_str, p) for p in exclude_spec):
+            if any(_fnmatch_check(rel_path_str, p) for p in exclude_spec):
                 return False
     if include_spec:
         if HAS_PATHSPEC:
             if not include_spec.match_file(rel_path_str):
                 return False
         else:
-            if not any(fnmatch.fnmatch(rel_path_str, p) for p in include_spec):
+            if not any(_fnmatch_check(rel_path_str, p) for p in include_spec):
                 return False
     return True
 
@@ -195,7 +212,7 @@ def collect_files(
                     if gi_file.exists():
                         try:
                             with open(gi_file, "r", encoding="utf-8", errors="ignore") as f:
-                                spec = pathspec.PathSpec.from_lines('gitignore', f)  # updated
+                                spec = pathspec.PathSpec.from_lines('gitignore', f)
                                 gitignore_specs[str(root_path)] = spec
                         except Exception as e:
                             logger.debug(f"Could not parse {gi_file}: {e}")
@@ -215,7 +232,7 @@ def collect_files(
                             if exclude_spec.match_file(rel_to_base):
                                 continue
                         else:
-                            if any(fnmatch.fnmatch(rel_to_base, p) for p in exclude_spec):
+                            if any(_fnmatch_check(rel_to_base, p) for p in exclude_spec):
                                 continue
                     
                     # Check gitignore
