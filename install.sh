@@ -3,6 +3,8 @@
 #  CodeGluer – Installer
 #  Sets up the right-click context menu integration for
 #  Nautilus (GNOME Files) and Nemo (Cinnamon Files).
+#  Now with smart folder detection: if a folder is selected,
+#  the -r flag is automatically added.
 # ============================================================
 
 set -euo pipefail
@@ -40,6 +42,17 @@ if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
 fi
 
 # ----------------------------------------------------------
+# 1.5 Install Python dependencies (pathspec)
+# ----------------------------------------------------------
+echo -e "${YELLOW}➜ Checking for pathspec library...${NC}"
+if python3 -c "import pathspec" &> /dev/null; then
+    echo -e "  ${GREEN}✔ pathspec is already installed.${NC}"
+else
+    echo -e "  ${YELLOW}⚠ pathspec not found. Installing for .gitignore support...${NC}"
+    python3 -m pip install --user pathspec || echo -e "  ${YELLOW}⚠ Could not auto-install pathspec. Run: python3 -m pip install --user pathspec${NC}"
+fi
+
+# ----------------------------------------------------------
 # 2. Nautilus integration (GNOME Files)
 # ----------------------------------------------------------
 NAUTILUS_SCRIPT_DIR="$HOME/.local/share/nautilus/scripts"
@@ -53,7 +66,6 @@ create_nautilus_script() {
     local format="$2"
     local script_path="$NAUTILUS_SCRIPT_DIR/$name"
 
-    # Unquoted heredoc – $format expands now, \$ variables stay for runtime
     cat > "$script_path" << NAUTILUS_EOF
 #!/usr/bin/env bash
 # Nautilus script – "Glue Code Files"
@@ -76,8 +88,17 @@ if [ \${#FILES[@]} -eq 0 ]; then
     exit 1
 fi
 
+# 🧠 SMART GUI: Automatically add -r if the user selected a folder
+RECURSIVE_FLAG=""
+for file in "\${FILES[@]}"; do
+    if [ -d "\$file" ]; then
+        RECURSIVE_FLAG="-r"
+        break
+    fi
+done
+
 # Run the gluer with the specified format
-OUTPUT=\$("\$GLUER" "\${FILES[@]}" --format $format 2>&1)
+OUTPUT=\$("\$GLUER" "\${FILES[@]}" \$RECURSIVE_FLAG --format $format 2>&1)
 EXIT_CODE=\$?
 
 if [ \$EXIT_CODE -eq 0 ]; then
@@ -102,14 +123,12 @@ if command -v nemo &>/dev/null; then
     NEMO_ACTION_DIR="$HOME/.local/share/nemo/actions"
     mkdir -p "$NEMO_ACTION_DIR"
 
-    # Helper to create a Nemo action and its wrapper
     create_nemo_action() {
         local label="$1"
         local format="$2"
         local action_file="$NEMO_ACTION_DIR/codegluer-${format}.nemo_action"
         local wrapper_file="$NEMO_ACTION_DIR/codegluer-nemo-${format}.sh"
 
-        # Unquoted heredoc – clean and no sed needed
         cat > "$wrapper_file" << NEMO_WRAPPER_EOF
 #!/usr/bin/env bash
 GLUER="\$HOME/.local/bin/codegluer"
@@ -119,7 +138,16 @@ if [ ! -x "\$GLUER" ]; then
     exit 1
 fi
 
-OUTPUT=\$("\$GLUER" "\$@" --format $format 2>&1)
+# 🧠 SMART GUI: Automatically add -r if the user selected a folder
+RECURSIVE_FLAG=""
+for arg in "\$@"; do
+    if [ -d "\$arg" ]; then
+        RECURSIVE_FLAG="-r"
+        break
+    fi
+done
+
+OUTPUT=\$("\$GLUER" "\$@" \$RECURSIVE_FLAG --format $format 2>&1)
 EXIT_CODE=\$?
 
 if [ \$EXIT_CODE -eq 0 ]; then
@@ -160,7 +188,7 @@ echo -e "${GREEN}═════════════════════
 echo ""
 echo "  How to use:"
 echo "  1. Open your file manager (Nautilus / Nemo)"
-echo "  2. Select the code files you want to glue"
+echo "  2. Select the files or folders you want to glue"
 echo "  3. Right-click → Scripts → Glue Code Files (Plain) or (Markdown)"
 echo "  4. A 'glued_code.txt' or 'glued_code.md' will appear in the same directory"
 echo ""
