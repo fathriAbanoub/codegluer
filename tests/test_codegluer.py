@@ -6,9 +6,6 @@ from pathlib import Path
 
 import codegluer
 
-# -------------------------------------------------------------------
-#  Unit tests for helper functions
-# -------------------------------------------------------------------
 
 class TestHelpers:
     def test_build_header(self):
@@ -25,54 +22,142 @@ class TestHelpers:
         assert footer.endswith("=")
         assert len(footer) >= codegluer.SEPARATOR_LENGTH
 
-# -------------------------------------------------------------------
-#  Functional tests for glue_files()
-# -------------------------------------------------------------------
+    def test_detect_language(self):
+        assert codegluer.detect_language("main.py") == "python"
+        assert codegluer.detect_language("app.js") == "javascript"
+        assert codegluer.detect_language("style.css") == "css"
+        assert codegluer.detect_language("unknown.xyz") == ""
+        assert codegluer.detect_language("README.md") == "markdown"
+
+    def test_sanitize_filename_for_markdown(self):
+        # Normal filename
+        assert codegluer.sanitize_filename_for_markdown("test.py") == "test.py"
+        # Backticks -> HTML entity
+        assert codegluer.sanitize_filename_for_markdown("test`file.py") == "test&#96;file.py"
+        # Newlines -> spaces
+        assert codegluer.sanitize_filename_for_markdown("test\nfile.py") == "test file.py"
+        # Multiple
+        assert codegluer.sanitize_filename_for_markdown("test`\nfile.py") == "test&#96; file.py"
+
+    def test_build_markdown_section(self):
+        # Basic case
+        section = codegluer.build_markdown_section("test.py", "print('hello')")
+        assert "### `test.py`" in section
+        assert "```python" in section
+        assert "print('hello')" in section
+        assert section.count("```") == 2
+
+        # Edge: content contains backticks
+        content_with_backticks = "```\nsome code\n```"
+        section = codegluer.build_markdown_section("test.py", content_with_backticks)
+        # Should use a fence longer than 3 because content has 3 backticks
+        assert "````python" in section or "`````python" in section
+        assert "some code" in section
+
+        # Edge: content has a very long run of backticks
+        long_run = "`" * 100 + "code"
+        section = codegluer.build_markdown_section("test.py", long_run)
+        # Fence should be at least 101
+        assert "`" * 101 in section
+
+        # NEW: filename with backticks and newlines
+        tricky_filename = "test`file\nwith_newline.py"
+        section = codegluer.build_markdown_section(tricky_filename, "content")
+        safe = codegluer.sanitize_filename_for_markdown(tricky_filename)
+        assert f"### `{safe}`" in section
+        # Ensure backticks are escaped and newlines removed
+        assert "&#96;" in section
+        assert "with_newline" in section  # newline replaced with space
+
 
 class TestGlueFiles:
-    def test_basic_glue(self, tmp_dir, sample_files):
+    def test_basic_glue_plain(self, tmp_dir, sample_files):
         files = list(sample_files.values())
         output_path = tmp_dir / "glued.txt"
-        out, count = codegluer.glue_files(files, output_path=str(output_path))
+        out, count = codegluer.glue_files(
+            files, output_path=str(output_path), output_format="plain"
+        )
         assert count == len(files)
-        assert out == str(output_path)
-        assert output_path.exists()
-
-        content = output_path.read_text(encoding="utf-8")
-        for name, path in sample_files.items():
+        content = output_path.read_text()
+        for name in sample_files:
             assert f"BEGIN FILE: {name}" in content
             assert f"END FILE: {name}" in content
+            assert sample_files[name].read_text() in content
+
+    def test_basic_glue_markdown(self, tmp_dir, sample_files):
+        files = list(sample_files.values())
+        output_path = tmp_dir / "glued.md"
+        out, count = codegluer.glue_files(
+            files, output_path=str(output_path), output_format="markdown"
+        )
+        assert count == len(files)
+        content = output_path.read_text()
+        for name, path in sample_files.items():
+            assert f"### `{name}`" in content
+            if name.endswith(".py"):
+                assert "```python" in content
+            elif name.endswith(".js"):
+                assert "```javascript" in content
+            else:
+                assert "```text" in content or "```" in content
             assert path.read_text() in content
 
-    def test_glue_without_output_path(self, tmp_dir, sample_files):
+    def test_glue_without_output_path_plain(self, tmp_dir, sample_files):
         files = list(sample_files.values())
-        out, count = codegluer.glue_files(files, output_path=None)
+        out, count = codegluer.glue_files(files, output_path=None, output_format="plain")
         expected = tmp_dir / "glued_code.txt"
         assert out == str(expected)
         assert expected.exists()
 
-    def test_glue_with_existing_output(self, tmp_dir, sample_files):
+    def test_glue_without_output_path_markdown(self, tmp_dir, sample_files):
+        files = list(sample_files.values())
+        out, count = codegluer.glue_files(files, output_path=None, output_format="markdown")
+        expected = tmp_dir / "glued_code.md"
+        assert out == str(expected)
+        assert expected.exists()
+
+    def test_glue_with_existing_output_plain(self, tmp_dir, sample_files):
         files = list(sample_files.values())
         existing = tmp_dir / "glued_code.txt"
         existing.touch()
-        out, count = codegluer.glue_files(files, output_path=None)
+        out, count = codegluer.glue_files(files, output_path=None, output_format="plain")
         assert out != str(existing)
         assert Path(out).exists()
         assert out.startswith(str(tmp_dir / "glued_code_"))
         assert out.endswith(".txt")
 
+    def test_glue_with_existing_output_markdown(self, tmp_dir, sample_files):
+        files = list(sample_files.values())
+        existing = tmp_dir / "glued_code.md"
+        existing.touch()
+        out, count = codegluer.glue_files(files, output_path=None, output_format="markdown")
+        assert out != str(existing)
+        assert Path(out).exists()
+        assert out.startswith(str(tmp_dir / "glued_code_"))
+        assert out.endswith(".md")
+
     def test_glue_with_custom_output(self, tmp_dir, sample_files):
         custom = tmp_dir / "custom.txt"
         files = list(sample_files.values())
-        out, count = codegluer.glue_files(files, output_path=str(custom))
+        out, count = codegluer.glue_files(
+            files, output_path=str(custom), output_format="plain"
+        )
         assert out == str(custom)
         assert custom.exists()
+
+    def test_invalid_output_format(self, tmp_dir, sample_files):
+        files = list(sample_files.values())
+        with pytest.raises(ValueError) as exc:
+            codegluer.glue_files(files, output_format="invalid")
+        assert "Invalid output_format" in str(exc.value)
 
     def test_empty_file(self, tmp_dir):
         empty = tmp_dir / "empty.txt"
         empty.touch()
         files = [empty]
-        out, count = codegluer.glue_files(files, output_path=str(tmp_dir / "out.txt"))
+        out, count = codegluer.glue_files(
+            files, output_path=str(tmp_dir / "out.txt"), output_format="plain"
+        )
         assert count == 1
         content = Path(out).read_text()
         assert "BEGIN FILE: empty.txt" in content
@@ -82,7 +167,9 @@ class TestGlueFiles:
         binary = tmp_dir / "binary.bin"
         binary.write_bytes(b"\xff\xfe\x00\x01")
         files = [binary]
-        out, count = codegluer.glue_files(files, output_path=str(tmp_dir / "out.txt"))
+        out, count = codegluer.glue_files(
+            files, output_path=str(tmp_dir / "out.txt"), output_format="plain"
+        )
         assert count == 1
         content = Path(out).read_text(encoding="utf-8", errors="replace")
         assert "BEGIN FILE: binary.bin" in content
@@ -106,7 +193,9 @@ class TestGlueFiles:
         missing_file = tmp_dir / "ghost.txt"
         files = [valid_file, missing_file]
         output_path = tmp_dir / "out.txt"
-        out, count = codegluer.glue_files(files, output_path=str(output_path))
+        out, count = codegluer.glue_files(
+            files, output_path=str(output_path), output_format="plain"
+        )
         assert count == 1
         assert output_path.exists()
         content = output_path.read_text()
@@ -117,12 +206,9 @@ class TestGlueFiles:
         with pytest.raises(codegluer.NoFilesError):
             codegluer.glue_files([])
 
-# -------------------------------------------------------------------
-#  CLI tests via subprocess (these remain unchanged)
-# -------------------------------------------------------------------
 
 class TestCLI:
-    def test_cli_basic(self, tmp_dir, sample_files):
+    def test_cli_basic_plain(self, tmp_dir, sample_files):
         files = list(sample_files.values())
         script_path = Path(__file__).parent.parent / "codegluer.py"
         cmd = [sys.executable, str(script_path)] + [str(f) for f in files]
@@ -134,6 +220,22 @@ class TestCLI:
         content = out_path.read_text()
         for name in sample_files:
             assert f"BEGIN FILE: {name}" in content
+
+    def test_cli_markdown_format(self, tmp_dir, sample_files):
+        files = list(sample_files.values())
+        script_path = Path(__file__).parent.parent / "codegluer.py"
+        cmd = [
+            sys.executable, str(script_path),
+            "--format", "markdown",
+            "-o", str(tmp_dir / "out.md")
+        ] + [str(f) for f in files]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        assert result.returncode == 0
+        out_path = tmp_dir / "out.md"
+        assert out_path.exists()
+        content = out_path.read_text()
+        for name in sample_files:
+            assert f"### `{name}`" in content
 
     def test_cli_with_output(self, tmp_dir, sample_files):
         files = list(sample_files.values())
@@ -159,9 +261,6 @@ class TestCLI:
         assert result.returncode == 0
         assert "Glue multiple code files" in result.stdout
 
-# -------------------------------------------------------------------
-#  Stress tests (unchanged)
-# -------------------------------------------------------------------
 
 class TestStress:
     def test_many_files(self, tmp_dir):
@@ -171,7 +270,9 @@ class TestStress:
             p.write_text(f"Content {i}\n")
             files.append(p)
         output = tmp_dir / "out.txt"
-        out, count = codegluer.glue_files(files, output_path=str(output))
+        out, count = codegluer.glue_files(
+            files, output_path=str(output), output_format="plain"
+        )
         assert count == 1000
         assert output.exists()
         content = output.read_text()
@@ -181,7 +282,9 @@ class TestStress:
     def test_large_file(self, tmp_dir, large_file):
         files = [large_file]
         output = tmp_dir / "out.txt"
-        out, count = codegluer.glue_files(files, output_path=str(output))
+        out, count = codegluer.glue_files(
+            files, output_path=str(output), output_format="plain"
+        )
         assert count == 1
         assert output.exists()
         size = output.stat().st_size
@@ -194,7 +297,9 @@ class TestStress:
         deep_file = deep_dir / "deep.txt"
         deep_file.write_text("deep content")
         output = tmp_dir / "out.txt"
-        out, count = codegluer.glue_files([deep_file], output_path=str(output))
+        out, count = codegluer.glue_files(
+            [deep_file], output_path=str(output), output_format="plain"
+        )
         assert count == 1
         content = output.read_text()
         assert "BEGIN FILE: deep.txt" in content
@@ -205,7 +310,9 @@ class TestStress:
         p = tmp_dir / filename
         p.write_text("special")
         output = tmp_dir / "out.txt"
-        out, count = codegluer.glue_files([p], output_path=str(output))
+        out, count = codegluer.glue_files(
+            [p], output_path=str(output), output_format="plain"
+        )
         assert count == 1
         content = output.read_text()
         assert f"BEGIN FILE: {filename}" in content
@@ -215,7 +322,9 @@ class TestStress:
         p = tmp_dir / "long.txt"
         p.write_text(long_line)
         output = tmp_dir / "out.txt"
-        out, count = codegluer.glue_files([p], output_path=str(output))
+        out, count = codegluer.glue_files(
+            [p], output_path=str(output), output_format="plain"
+        )
         assert count == 1
         content = output.read_text()
         assert long_line in content
@@ -235,7 +344,9 @@ class TestStress:
         files.append(large)
 
         output = tmp_dir / "out.txt"
-        out, count = codegluer.glue_files(files, output_path=str(output))
+        out, count = codegluer.glue_files(
+            files, output_path=str(output), output_format="plain"
+        )
         assert count == len(files)
         assert output.exists()
         total_size = sum(p.stat().st_size for p in files)

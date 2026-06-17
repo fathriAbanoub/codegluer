@@ -43,91 +43,109 @@ fi
 # 2. Nautilus integration (GNOME Files)
 # ----------------------------------------------------------
 NAUTILUS_SCRIPT_DIR="$HOME/.local/share/nautilus/scripts"
-NAUTILUS_SCRIPT="$NAUTILUS_SCRIPT_DIR/Glue Code Files"
 
 echo -e "${YELLOW}➜ Setting up Nautilus right-click integration...${NC}"
 mkdir -p "$NAUTILUS_SCRIPT_DIR"
 
-cat > "$NAUTILUS_SCRIPT" << 'NAUTILUS_EOF'
+# Helper function to create a Nautilus script
+create_nautilus_script() {
+    local name="$1"
+    local format="$2"
+    local script_path="$NAUTILUS_SCRIPT_DIR/$name"
+
+    # Unquoted heredoc – $format expands now, \$ variables stay for runtime
+    cat > "$script_path" << NAUTILUS_EOF
 #!/usr/bin/env bash
 # Nautilus script – "Glue Code Files"
-# NAUTILUS_SCRIPT_SELECTED_FILE_PATHS contains selected files, one per line.
 
-GLUER="$HOME/.local/bin/codegluer"
+GLUER="\$HOME/.local/bin/codegluer"
 
-if [ ! -x "$GLUER" ]; then
-    notify-send "CodeGluer" "Error: CodeGluer not found at $GLUER" --icon=dialog-error
+if [ ! -x "\$GLUER" ]; then
+    notify-send "CodeGluer" "Error: CodeGluer not found at \$GLUER" --icon=dialog-error
     exit 1
 fi
 
 # Collect selected files
 FILES=()
 while IFS= read -r file; do
-    [ -n "$file" ] && FILES+=("$file")
-done <<< "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"
+    [ -n "\$file" ] && FILES+=("\$file")
+done <<< "\$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"
 
-if [ ${#FILES[@]} -eq 0 ]; then
+if [ \${#FILES[@]} -eq 0 ]; then
     notify-send "CodeGluer" "No files selected." --icon=dialog-warning
     exit 1
 fi
 
-# Run the gluer
-OUTPUT=$("$GLUER" "${FILES[@]}" 2>&1)
-EXIT_CODE=$?
+# Run the gluer with the specified format
+OUTPUT=\$("\$GLUER" "\${FILES[@]}" --format $format 2>&1)
+EXIT_CODE=\$?
 
-if [ $EXIT_CODE -eq 0 ]; then
-    notify-send "CodeGluer" "$OUTPUT" --icon=dialog-information
+if [ \$EXIT_CODE -eq 0 ]; then
+    notify-send "CodeGluer" "\$OUTPUT" --icon=dialog-information
 else
-    notify-send "CodeGluer" "Error: $OUTPUT" --icon=dialog-error
+    notify-send "CodeGluer" "Error: \$OUTPUT" --icon=dialog-error
 fi
 NAUTILUS_EOF
 
-chmod +x "$NAUTILUS_SCRIPT"
-echo -e "  ${GREEN}✔ Nautilus script installed${NC}"
+    chmod +x "$script_path"
+    echo -e "  ${GREEN}✔ Nautilus script: $name${NC}"
+}
+
+create_nautilus_script "Glue Code Files (Plain)" "plain"
+create_nautilus_script "Glue Code Files (Markdown)" "markdown"
 
 # ----------------------------------------------------------
 # 3. Nemo integration (Cinnamon Files) – optional
 # ----------------------------------------------------------
-NEMO_ACTION_DIR="$HOME/.local/share/nemo/actions"
-NEMO_ACTION="$NEMO_ACTION_DIR/codegluer.nemo_action"
-NEMO_SCRIPT_DIR="$HOME/.local/share/nemo/actions"
-NEMO_SCRIPT="$NEMO_SCRIPT_DIR/codegluer-nemo.sh"
-
 if command -v nemo &>/dev/null; then
-    echo -e "${YELLOW}➜ Nemo detected – setting up Nemo action...${NC}"
+    echo -e "${YELLOW}➜ Nemo detected – setting up Nemo actions...${NC}"
+    NEMO_ACTION_DIR="$HOME/.local/share/nemo/actions"
     mkdir -p "$NEMO_ACTION_DIR"
 
-    cat > "$NEMO_ACTION" << EOF
+    # Helper to create a Nemo action and its wrapper
+    create_nemo_action() {
+        local label="$1"
+        local format="$2"
+        local action_file="$NEMO_ACTION_DIR/codegluer-${format}.nemo_action"
+        local wrapper_file="$NEMO_ACTION_DIR/codegluer-nemo-${format}.sh"
+
+        # Unquoted heredoc – clean and no sed needed
+        cat > "$wrapper_file" << NEMO_WRAPPER_EOF
+#!/usr/bin/env bash
+GLUER="\$HOME/.local/bin/codegluer"
+
+if [ ! -x "\$GLUER" ]; then
+    notify-send "CodeGluer" "Error: CodeGluer not found at \$GLUER" --icon=dialog-error
+    exit 1
+fi
+
+OUTPUT=\$("\$GLUER" "\$@" --format $format 2>&1)
+EXIT_CODE=\$?
+
+if [ \$EXIT_CODE -eq 0 ]; then
+    notify-send "CodeGluer" "\$OUTPUT" --icon=dialog-information
+else
+    notify-send "CodeGluer" "Error: \$OUTPUT" --icon=dialog-error
+fi
+NEMO_WRAPPER_EOF
+
+        chmod +x "$wrapper_file"
+
+        cat > "$action_file" << EOF
 [Nemo Action]
-Name=Glue Code Files
-Comment=Glue selected files into a single .txt with markers
-Exec=$NEMO_SCRIPT %F
+Name=$label
+Comment=Glue selected files into a single file ($format)
+Exec=$wrapper_file %F
 Icon-Name=text-x-generic
 Selection=notnone
 Extensions=any;
 EOF
 
-    cat > "$NEMO_SCRIPT" << 'NEMO_SCRIPT_EOF'
-#!/usr/bin/env bash
-GLUER="$HOME/.local/bin/codegluer"
+        echo -e "  ${GREEN}✔ Nemo action: $label${NC}"
+    }
 
-if [ ! -x "$GLUER" ]; then
-    notify-send "CodeGluer" "Error: CodeGluer not found at $GLUER" --icon=dialog-error
-    exit 1
-fi
-
-OUTPUT=$("$GLUER" "$@" 2>&1)
-EXIT_CODE=$?
-
-if [ $EXIT_CODE -eq 0 ]; then
-    notify-send "CodeGluer" "$OUTPUT" --icon=dialog-information
-else
-    notify-send "CodeGluer" "Error: $OUTPUT" --icon=dialog-error
-fi
-NEMO_SCRIPT_EOF
-
-    chmod +x "$NEMO_SCRIPT"
-    echo -e "  ${GREEN}✔ Nemo action installed${NC}"
+    create_nemo_action "Glue Code Files (Plain)" "plain"
+    create_nemo_action "Glue Code Files (Markdown)" "markdown"
 else
     echo -e "  ${YELLOW}ℹ  Nemo not detected – skipping Nemo integration.${NC}"
 fi
@@ -143,10 +161,9 @@ echo ""
 echo "  How to use:"
 echo "  1. Open your file manager (Nautilus / Nemo)"
 echo "  2. Select the code files you want to glue"
-echo "  3. Right-click → Scripts → Glue Code Files"
-echo "  4. A 'glued_code.txt' file will appear in the same directory"
+echo "  3. Right-click → Scripts → Glue Code Files (Plain) or (Markdown)"
+echo "  4. A 'glued_code.txt' or 'glued_code.md' will appear in the same directory"
 echo ""
 echo "  You can also use it from the terminal:"
-echo "    codegluer file1.py file2.js file3.html"
-echo "    codegluer file1.py file2.js -o output.txt"
+echo "    codegluer file1.py file2.js --format markdown -o output.md"
 echo ""
