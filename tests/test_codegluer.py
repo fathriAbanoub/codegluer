@@ -16,7 +16,6 @@ class TestHelpers:
         assert " BEGIN FILE: test.py " in header
         assert header.startswith("=")
         assert header.endswith("=")
-        # Allow length to be >= 70 (overflow for long filenames)
         assert len(header) >= codegluer.SEPARATOR_LENGTH
 
     def test_build_footer(self):
@@ -24,7 +23,6 @@ class TestHelpers:
         assert " END FILE: test.py " in footer
         assert footer.startswith("=")
         assert footer.endswith("=")
-        # Allow length to be >= 70 (overflow for long filenames)
         assert len(footer) >= codegluer.SEPARATOR_LENGTH
 
 # -------------------------------------------------------------------
@@ -36,7 +34,6 @@ class TestGlueFiles:
         files = list(sample_files.values())
         output_path = tmp_dir / "glued.txt"
         out, count = codegluer.glue_files(files, output_path=str(output_path))
-
         assert count == len(files)
         assert out == str(output_path)
         assert output_path.exists()
@@ -94,28 +91,22 @@ class TestGlueFiles:
     def test_missing_file(self, tmp_dir):
         missing = tmp_dir / "missing.txt"
         files = [missing]
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(codegluer.NoReadableFilesError):
             codegluer.glue_files(files, output_path=str(tmp_dir / "out.txt"))
-        assert exc.value.code == 1
 
     def test_directory_in_files(self, tmp_dir):
         dir_path = tmp_dir / "subdir"
         dir_path.mkdir()
         files = [dir_path]
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(codegluer.NoReadableFilesError):
             codegluer.glue_files(files, output_path=str(tmp_dir / "out.txt"))
-        assert exc.value.code == 1
 
-    # ----- NEW TEST: Mixed valid and missing files -----
     def test_mixed_valid_and_missing_files(self, tmp_dir, sample_files):
         valid_file = list(sample_files.values())[0]
         missing_file = tmp_dir / "ghost.txt"
         files = [valid_file, missing_file]
         output_path = tmp_dir / "out.txt"
-
-        # Should NOT exit; should glue the valid file and skip the missing one
         out, count = codegluer.glue_files(files, output_path=str(output_path))
-
         assert count == 1
         assert output_path.exists()
         content = output_path.read_text()
@@ -123,12 +114,11 @@ class TestGlueFiles:
         assert "ghost.txt" not in content
 
     def test_no_files(self):
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(codegluer.NoFilesError):
             codegluer.glue_files([])
-        assert exc.value.code == 1
 
 # -------------------------------------------------------------------
-#  CLI tests via subprocess
+#  CLI tests via subprocess (these remain unchanged)
 # -------------------------------------------------------------------
 
 class TestCLI:
@@ -160,7 +150,7 @@ class TestCLI:
         cmd = [sys.executable, str(script_path), str(missing)]
         result = subprocess.run(cmd, capture_output=True, text=True)
         assert result.returncode != 0
-        assert "Error: No files could be read" in result.stderr
+        assert "Error: No files could be read." in result.stderr
 
     def test_cli_help(self, tmp_dir):
         script_path = Path(__file__).parent.parent / "codegluer.py"
@@ -170,7 +160,7 @@ class TestCLI:
         assert "Glue multiple code files" in result.stdout
 
 # -------------------------------------------------------------------
-#  Stress tests
+#  Stress tests (unchanged)
 # -------------------------------------------------------------------
 
 class TestStress:
