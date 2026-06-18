@@ -262,7 +262,7 @@ class TestCLI:
                 cli.main()
         assert exc.value.code == 0
         captured = capsys.readouterr()
-        assert "CodeGluer 1.0.0" in captured.out
+        assert f"CodeGluer {codegluer.__version__}" in captured.out
 
 # ----------------------------------------------------------------------
 # Stress tests

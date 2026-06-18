@@ -230,8 +230,9 @@ def glue_files(
     if not file_paths:
         raise NoReadableFilesError("No files could be read after filtering.")
 
-    # file_paths are already resolved – compute base_dir from them
-    base_dir = _get_common_base(file_paths)
+    # Compute base_dir from original input paths (not filtered file_paths)
+    # to ensure consistent output location regardless of filtering results
+    base_dir = _get_common_base([Path(p).resolve() for p in paths])
 
     if output_path is None:
         ext = ".md" if output_format == "markdown" else ".txt"
