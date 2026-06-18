@@ -18,6 +18,7 @@ Perfect for sharing code context with AI assistants, code reviews, documentation
 - 🖱️ **Right‑Click Integration** – Works seamlessly from Nautilus (GNOME) and Nemo (Cinnamon) context menus.
 - 🔔 **Desktop Notifications** – Get notified when the GUI operation completes.
 - 💻 **CLI Support** – Use it from the terminal with powerful options.
+- ⏱️ **Auto‑Timestamping** – Prevents accidental overwrites for default outputs by appending microsecond timestamps (explicit `--output` paths will still overwrite).
 
 ## 📦 Dependencies
 
@@ -80,7 +81,7 @@ codegluer src/ -r --include "**/*.py" --include "**/*.ts"
 
 ## 🧠 Smart CLI Behaviors
 
-- **Auto‑Timestamping:** If the output file already exists, CodeGluer appends a timestamp with microseconds to prevent overwrites.
+- **Auto‑Timestamping:** For the default output (when no `--output` is specified), if the default output file already exists, CodeGluer appends a timestamp with microseconds to prevent overwrites. When you explicitly provide an output path with `--output` or `-o`, any existing file at that path will be overwritten without timestamp protection.
 - **Graceful Degradation:** Missing or unreadable files are skipped with a warning; the tool glues the remaining files without crashing.
 - **Space & Unicode Safe:** Handles filenames with spaces, parentheses, and special characters flawlessly.
 - **Relative Display Names:** When recursing, files are labelled with their relative paths (e.g., `src/utils.py`) to avoid filename collisions.

@@ -126,7 +126,8 @@ def collect_files(
     """
     Collect files from the given paths, applying filtering and .gitignore rules.
 
-    Returns a list of resolved Path objects.
+    Returns a list of resolved Path objects, preserving input order and
+    with duplicates removed.
     """
     exclude_patterns = exclude_patterns or []
     include_patterns = include_patterns or []
@@ -201,6 +202,8 @@ def collect_files(
                         continue
                     collected.append(file_abs)
 
+    # Deduplicate while preserving insertion order (dict is ordered as of Python 3.7+)
+    collected = list(dict.fromkeys(collected))
     return collected
 
 def glue_files(
@@ -212,6 +215,9 @@ def glue_files(
     exclude_patterns=None,
     include_patterns=None,
 ):
+    # Ensure paths can be iterated multiple times (e.g., if a generator is passed)
+    paths = list(paths)
+
     if output_format not in ("plain", "markdown"):
         raise ValueError(f"Invalid output_format: {output_format!r}. Must be 'plain' or 'markdown'.")
 
@@ -230,18 +236,19 @@ def glue_files(
     if not file_paths:
         raise NoReadableFilesError("No files could be read after filtering.")
 
-    # Compute base_dir from original input paths (not filtered file_paths)
-    # to ensure consistent output location regardless of filtering results
-    base_dir = _get_common_base([Path(p).resolve() for p in paths])
+    # Compute output base from first input path to ensure writable location
+    resolved_input_paths = [Path(p).resolve() for p in paths]
+    first_resolved = resolved_input_paths[0]
+    output_base_dir = first_resolved.parent if first_resolved.is_file() else first_resolved
+    # Compute display base as common base for relative paths
+    display_base_dir = _get_common_base(resolved_input_paths)
 
     if output_path is None:
         ext = ".md" if output_format == "markdown" else ".txt"
-        output_path = str(base_dir / f"glued_code{ext}")
+        output_path = str(output_base_dir / f"glued_code{ext}")
         if os.path.exists(output_path):
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            output_path = str(base_dir / f"glued_code_{ts}{ext}")
-
-    display_base_dir = base_dir
+            output_path = str(output_base_dir / f"glued_code_{ts}{ext}")
 
     sections = []
     success_count = 0
@@ -252,7 +259,12 @@ def glue_files(
             continue
 
         try:
-            display_name = str(filepath.relative_to(display_base_dir)).replace("\\", "/")
+            # If display_base_dir is root, relative_to would strip the leading slash,
+            # so we use the absolute path to avoid ambiguity.
+            if display_base_dir == Path("/"):
+                display_name = str(filepath).replace("\\", "/")
+            else:
+                display_name = str(filepath.relative_to(display_base_dir)).replace("\\", "/")
         except ValueError:
             display_name = filepath.name
 

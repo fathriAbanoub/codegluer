@@ -45,14 +45,24 @@ remove_if_exists "$HOME/.local/share/nemo/actions/codegluer.nemo_action" # old s
 remove_if_exists "$HOME/.local/share/nemo/actions/codegluer-nemo.sh"     # old single entry
 
 # ----------------------------------------------------------
-# 1. Uninstall the Python package FIRST
+# 1. Uninstall the Python package
 # ----------------------------------------------------------
 echo -e "${YELLOW}➜ Uninstalling CodeGluer Python package...${NC}"
+
+pipx_uninstalled=false
+pip_uninstalled=false
+
 if pipx uninstall codegluer 2>/dev/null; then
     echo -e "  ${GREEN}✔ Uninstalled via pipx.${NC}"
-elif python3 -m pip uninstall -y codegluer 2>/dev/null; then
+    pipx_uninstalled=true
+fi
+
+if python3 -m pip uninstall -y codegluer 2>/dev/null; then
     echo -e "  ${GREEN}✔ Uninstalled via pip.${NC}"
-else
+    pip_uninstalled=true
+fi
+
+if [ "$pipx_uninstalled" = false ] && [ "$pip_uninstalled" = false ]; then
     echo -e "  ${YELLOW}ℹ  Package not found.${NC}"
 fi
 
