@@ -1,0 +1,51 @@
+# ==========================================================
+# Python
+# ==========================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# ==========================================================
+# Testing & Coverage
+# ==========================================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ==========================================================
+# IDEs & Editors
+# ==========================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ==========================================================
+# OS Files
+# ==========================================================
+.DS_Store
+Thumbs.db
+
+# ==========================================================
+# CodeGluer Specific (Optional)
+# Ignores the default output files so you don't accidentally 
+# commit glued code into your repository.
+# ==========================================================
+glued_code.txt
+glued_code.md

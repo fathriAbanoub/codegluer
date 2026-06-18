@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  CodeGluer – Uninstaller
-#  Removes the gluer script and all file manager integrations.
-#  Also cleans up legacy "Code Combiner" files for upgraders.
+#  Removes file manager integrations and uninstalls the package.
 # ============================================================
 
 set -euo pipefail
@@ -27,10 +26,9 @@ remove_if_exists() {
     fi
 }
 
-echo -e "${YELLOW}➜ Removing installed files...${NC}"
+echo -e "${YELLOW}➜ Removing file manager integrations...${NC}"
 
 # --- New CodeGluer files ---
-remove_if_exists "$HOME/.local/bin/codegluer"
 remove_if_exists "$HOME/.local/share/nautilus/scripts/Glue Code Files (Plain)"
 remove_if_exists "$HOME/.local/share/nautilus/scripts/Glue Code Files (Markdown)"
 remove_if_exists "$HOME/.local/share/nemo/actions/codegluer-plain.nemo_action"
@@ -39,13 +37,41 @@ remove_if_exists "$HOME/.local/share/nemo/actions/codegluer-nemo-plain.sh"
 remove_if_exists "$HOME/.local/share/nemo/actions/codegluer-nemo-markdown.sh"
 
 # --- Legacy Code Combiner files (for upgraders) ---
-remove_if_exists "$HOME/.local/bin/code-combiner"
 remove_if_exists "$HOME/.local/share/nautilus/scripts/Combine Code Files"
 remove_if_exists "$HOME/.local/share/nautilus/scripts/Glue Code Files"   # old single entry
 remove_if_exists "$HOME/.local/share/nemo/actions/code-combiner.nemo_action"
 remove_if_exists "$HOME/.local/share/nemo/actions/code-combiner-nemo.sh"
 remove_if_exists "$HOME/.local/share/nemo/actions/codegluer.nemo_action" # old single entry
 remove_if_exists "$HOME/.local/share/nemo/actions/codegluer-nemo.sh"     # old single entry
+
+# ----------------------------------------------------------
+# 1. Uninstall the Python package
+# ----------------------------------------------------------
+echo -e "${YELLOW}➜ Uninstalling CodeGluer Python package...${NC}"
+
+pipx_uninstalled=false
+pip_uninstalled=false
+
+if pipx uninstall codegluer 2>/dev/null; then
+    echo -e "  ${GREEN}✔ Uninstalled via pipx.${NC}"
+    pipx_uninstalled=true
+fi
+
+if python3 -m pip uninstall -y codegluer 2>/dev/null; then
+    echo -e "  ${GREEN}✔ Uninstalled via pip.${NC}"
+    pip_uninstalled=true
+fi
+
+if [ "$pipx_uninstalled" = false ] && [ "$pip_uninstalled" = false ]; then
+    echo -e "  ${YELLOW}ℹ  Package not found.${NC}"
+fi
+
+# ----------------------------------------------------------
+# 2. Fallback cleanup for binaries (in case pip missed them)
+# ----------------------------------------------------------
+echo -e "${YELLOW}➜ Cleaning up any leftover binaries...${NC}"
+remove_if_exists "$HOME/.local/bin/code-combiner"
+remove_if_exists "$HOME/.local/bin/codegluer"
 
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════${NC}"

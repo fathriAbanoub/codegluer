@@ -1,12 +1,13 @@
-import pytest
-import subprocess
 import sys
-import os
+import pytest
 from pathlib import Path
-
+from unittest.mock import patch
 import codegluer
+from codegluer import cli
 
-
+# ----------------------------------------------------------------------
+# Unit tests
+# ----------------------------------------------------------------------
 class TestHelpers:
     def test_build_header(self):
         header = codegluer.build_header("test.py")
@@ -58,7 +59,9 @@ class TestHelpers:
         assert "&#96;" in section
         assert "with_newline" in section
 
-
+# ----------------------------------------------------------------------
+# Functional tests using glue_files directly
+# ----------------------------------------------------------------------
 class TestGlueFiles:
     def test_basic_glue_plain(self, tmp_dir, sample_files):
         files = list(sample_files.values())
@@ -195,62 +198,75 @@ class TestGlueFiles:
         with pytest.raises(codegluer.NoFilesError):
             codegluer.glue_files([])
 
-
+# ----------------------------------------------------------------------
+# CLI tests (using patch and capsys)
+# ----------------------------------------------------------------------
 class TestCLI:
-    def test_cli_basic_plain(self, tmp_dir, sample_files):
+    def test_cli_basic_plain(self, tmp_dir, sample_files, capsys):
         files = list(sample_files.values())
-        script_path = Path(__file__).parent.parent / "codegluer.py"  # FIXED
-        cmd = [sys.executable, str(script_path)] + [str(f) for f in files]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        assert result.returncode == 0
-        assert "Glued" in result.stdout
         out_path = tmp_dir / "glued_code.txt"
+        test_args = ["codegluer", "-o", str(out_path)] + [str(f) for f in files]
+        with patch.object(sys, 'argv', test_args):
+            cli.main()
+        captured = capsys.readouterr()
+        assert "✅ Glued" in captured.out
         assert out_path.exists()
         content = out_path.read_text()
         for name in sample_files:
             assert f"BEGIN FILE: {name}" in content
 
-    def test_cli_markdown_format(self, tmp_dir, sample_files):
+    def test_cli_markdown_format(self, tmp_dir, sample_files, capsys):
         files = list(sample_files.values())
-        script_path = Path(__file__).parent.parent / "codegluer.py"  # FIXED
-        cmd = [
-            sys.executable, str(script_path),
-            "--format", "markdown",
-            "-o", str(tmp_dir / "out.md")
-        ] + [str(f) for f in files]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        assert result.returncode == 0
         out_path = tmp_dir / "out.md"
+        test_args = [
+            "codegluer", "--format", "markdown", "-o", str(out_path)
+        ] + [str(f) for f in files]
+        with patch.object(sys, 'argv', test_args):
+            cli.main()
         assert out_path.exists()
         content = out_path.read_text()
         for name in sample_files:
             assert f"### `{name}`" in content
 
-    def test_cli_with_output(self, tmp_dir, sample_files):
+    def test_cli_with_output(self, tmp_dir, sample_files, capsys):
         files = list(sample_files.values())
-        script_path = Path(__file__).parent.parent / "codegluer.py"  # FIXED
         custom = tmp_dir / "my_output.txt"
-        cmd = [sys.executable, str(script_path), "-o", str(custom)] + [str(f) for f in files]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        assert result.returncode == 0
+        test_args = ["codegluer", "-o", str(custom)] + [str(f) for f in files]
+        with patch.object(sys, 'argv', test_args):
+            cli.main()
         assert custom.exists()
 
-    def test_cli_error_missing_file(self, tmp_dir):
-        script_path = Path(__file__).parent.parent / "codegluer.py"  # FIXED
+    def test_cli_error_missing_file(self, tmp_dir, capsys):
         missing = tmp_dir / "does_not_exist.txt"
-        cmd = [sys.executable, str(script_path), str(missing)]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        assert result.returncode != 0
-        assert "Error: No files could be read after filtering." in result.stderr  # UPDATED
+        test_args = ["codegluer", str(missing)]
+        with patch.object(sys, 'argv', test_args):
+            with pytest.raises(SystemExit) as exc:
+                cli.main()
+        assert exc.value.code == 1
+        captured = capsys.readouterr()
+        assert "No files could be read after filtering." in captured.err
 
-    def test_cli_help(self, tmp_dir):
-        script_path = Path(__file__).parent.parent / "codegluer.py"  # FIXED
-        cmd = [sys.executable, str(script_path), "-h"]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        assert result.returncode == 0
-        assert "Glue multiple code files" in result.stdout
+    def test_cli_help(self, capsys):
+        test_args = ["codegluer", "-h"]
+        with patch.object(sys, 'argv', test_args):
+            with pytest.raises(SystemExit) as exc:
+                cli.main()
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert "Glue multiple code files" in captured.out
 
+    def test_cli_version(self, capsys):
+        test_args = ["codegluer", "--version"]
+        with patch.object(sys, 'argv', test_args):
+            with pytest.raises(SystemExit) as exc:
+                cli.main()
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert f"CodeGluer {codegluer.__version__}" in captured.out
 
+# ----------------------------------------------------------------------
+# Stress tests
+# ----------------------------------------------------------------------
 class TestStress:
     def test_many_files(self, tmp_dir):
         files = []
@@ -342,11 +358,9 @@ class TestStress:
         output_size = output.stat().st_size
         assert output_size > total_size
 
-
-# ============================================================================
-# New tests for advanced features (recursion, .gitignore, filtering, relative display names)
-# ============================================================================
-
+# ----------------------------------------------------------------------
+# Advanced tests (recursion, gitignore, filters)
+# ----------------------------------------------------------------------
 class TestAdvancedCollection:
     def test_recursive_directory(self, tmp_dir):
         (tmp_dir / "sub").mkdir()
@@ -358,9 +372,6 @@ class TestAdvancedCollection:
         assert {f.name for f in files} == {"a.txt", "b.txt"}
 
     def test_include_exclude_with_pathspec(self, tmp_dir):
-        if not codegluer.HAS_PATHSPEC:
-            pytest.skip("pathspec not installed")
-            
         (tmp_dir / "src").mkdir()
         (tmp_dir / "src" / "main.py").write_text("")
         (tmp_dir / "src" / "test.js").write_text("")
@@ -376,31 +387,7 @@ class TestAdvancedCollection:
         assert len(files) == 2
         assert {f.name for f in files} == {"main.py", "test.js"}
 
-    def test_include_exclude_fallback_fnmatch(self, tmp_dir):
-        (tmp_dir / "src").mkdir()
-        (tmp_dir / "src" / "main.py").write_text("")
-        (tmp_dir / "src" / "test.js").write_text("")
-        (tmp_dir / "dist").mkdir()
-        (tmp_dir / "dist" / "bundle.js").write_text("")
-        
-        original_has = codegluer.HAS_PATHSPEC
-        codegluer.HAS_PATHSPEC = False
-        try:
-            files = codegluer.collect_files(
-                [str(tmp_dir)], recursive=True,
-                include_patterns=["*.py", "*.js"],
-                exclude_patterns=["dist/*"]
-            )
-        finally:
-            codegluer.HAS_PATHSPEC = original_has
-        
-        assert len(files) == 2
-        assert {f.name for f in files} == {"main.py", "test.js"}
-
     def test_gitignore_respect_anchored(self, tmp_dir):
-        if not codegluer.HAS_PATHSPEC:
-            pytest.skip("pathspec not installed")
-            
         (tmp_dir / ".gitignore").write_text("/build/\n")
         (tmp_dir / "build").mkdir()
         (tmp_dir / "build" / "out.txt").write_text("ignore me")
@@ -418,9 +405,6 @@ class TestAdvancedCollection:
         assert "out.txt" not in file_names
 
     def test_gitignore_respect_nested(self, tmp_dir):
-        if not codegluer.HAS_PATHSPEC:
-            pytest.skip("pathspec not installed")
-            
         (tmp_dir / ".gitignore").write_text("*.log\n")
         (tmp_dir / "sub").mkdir()
         (tmp_dir / "sub" / ".gitignore").write_text("*.tmp\n")

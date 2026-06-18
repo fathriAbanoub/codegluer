@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codegluer"
+version = "1.0.0"
+description = "Glue multiple code files and directories into a single .txt or .md file."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+authors = [
+  { name = "fathriAbanoub" }
+]
+keywords = ["code", "glue", "context", "ai", "cli"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: Console",
+]
+dependencies = [
+    "pathspec>=0.11.0",
+]
+
+[project.scripts]
+codegluer = "codegluer.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/fathriAbanoub/codegluer"
+
+[tool.hatch.build.targets.wheel]
+packages = ["codegluer"]
+
+# pytest configuration (replaces old pytest.ini)
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "-v --tb=short --strict-markers"
