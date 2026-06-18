@@ -1,13 +1,6 @@
-import sys
-from pathlib import Path
-
-# Ensure the project root is in the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import pytest
 import tempfile
-import os
-import shutil
+from pathlib import Path
 
 @pytest.fixture
 def tmp_dir():
