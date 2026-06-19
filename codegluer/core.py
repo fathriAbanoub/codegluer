@@ -203,6 +203,12 @@ def build_tree_structure(file_paths, base_dir) -> TreeNode:
 
 def render_tree(node, prefix="", max_per_dir=10, max_depth=None, depth=0) -> list[str]:
     """Render the tree as a list of strings using box-drawing connectors."""
+    # Parameter validation
+    if max_per_dir < 1:
+        raise ValueError("max_per_dir must be at least 1")
+    if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
+        raise ValueError("max_depth must be None or a non-negative integer")
+
     lines = []
 
     if node.children is None:
@@ -465,6 +471,9 @@ def glue_files(
     anchors: list[tuple[str, str]] = []
     success_count = 0
 
+    # Track files that were actually read and added to sections
+    successful_paths = []
+
     for filepath in file_paths:
         if not filepath.is_file():
             logger.warning(f"Skipping '{filepath}' (not a regular file).")
@@ -514,6 +523,7 @@ def glue_files(
 
         sections.append(section)
         success_count += 1
+        successful_paths.append(filepath)   # record this file as successfully processed
 
     if not sections:
         raise NoReadableFilesError("No files could be read.")
@@ -537,9 +547,9 @@ def glue_files(
         sep = "=" * 50
         header_blocks.append(f"{sep}\n{stats.format_summary()}\n{sep}")
 
-    # 3. Project tree
+    # 3. Project tree (use only files that were successfully processed)
     if config.show_tree:
-        tree_root = build_tree_structure(file_paths, display_base_dir)
+        tree_root = build_tree_structure(successful_paths, display_base_dir)
         tree_lines = render_tree(
             tree_root,
             max_per_dir=config.tree_max_files,

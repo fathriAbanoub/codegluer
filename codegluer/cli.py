@@ -4,6 +4,29 @@ import logging
 from . import __version__
 from .core import glue_files, GlueConfig, CodeGluerError
 
+
+def non_negative_int(value):
+    """Argparse type for non-negative integers (>= 0)."""
+    try:
+        ivalue = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value} is not a valid integer")
+    if ivalue < 0:
+        raise argparse.ArgumentTypeError(f"{value} is not a non-negative integer")
+    return ivalue
+
+
+def positive_int(value):
+    """Argparse type for positive integers (> 0)."""
+    try:
+        ivalue = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value} is not a valid integer")
+    if ivalue <= 0:
+        raise argparse.ArgumentTypeError(f"{value} is not a positive integer")
+    return ivalue
+
+
 def main():
     logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
 
@@ -41,10 +64,10 @@ def main():
     # Tree
     parser.add_argument("--tree", action="store_true",
         help="Prepend an ASCII project structure tree to the output.")
-    parser.add_argument("--tree-depth", type=int, default=None,
-        help="Limit the depth of the ASCII tree.")
-    parser.add_argument("--tree-max-files", type=int, default=10,
-        help="Collapse directories with more than N items in the tree (default: 10).")
+    parser.add_argument("--tree-depth", type=non_negative_int, default=None,
+        help="Limit the depth of the ASCII tree (non-negative integer).")
+    parser.add_argument("--tree-max-files", type=positive_int, default=10,
+        help="Collapse directories with more than N items in the tree (positive integer; default: 10).")
 
     # Stats
     parser.add_argument("--stats", action="store_true",
@@ -97,6 +120,7 @@ def main():
     except Exception as e:
         print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

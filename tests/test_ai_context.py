@@ -67,9 +67,12 @@ class TestAIContextFeatures:
     # ── ProjectStats ──────────────────────────────────────────────────
 
     def test_stats_accuracy(self, tmp_dir):
-        a = tmp_dir / "a.py"; a.write_text("x\ny\n")
-        b = tmp_dir / "b.py"; b.write_text("z\n")
-        c = tmp_dir / "c.js"; c.write_text("w")
+        a = tmp_dir / "a.py"
+        a.write_text("x\ny\n")
+        b = tmp_dir / "b.py"
+        b.write_text("z\n")
+        c = tmp_dir / "c.js"
+        c.write_text("w")
 
         stats = ProjectStats()
         stats.ingest(a, "x\ny\n")
