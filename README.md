@@ -98,7 +98,7 @@ codegluer src/ -r --format markdown -o - | llm "explain this codebase"
 - **Graceful Degradation:** Missing or unreadable files are skipped with a warning; the tool glues the remaining files without crashing.
 - **Space & Unicode Safe:** Handles filenames with spaces, parentheses, and special characters flawlessly.
 - **Relative Display Names:** When recursing, files are labelled with their relative paths (e.g., `src/utils.py`) to avoid filename collisions.
-- **`--preamble` / `--ai-prompt`:** Prepend a custom text block before the code sections. Useful for adding instructions, project context, or a description that an AI assistant will see at the top of the file.
+- **`--ai-prompt` / `--ai-prompt-file`:** Prepend a custom text block before the code sections. Useful for adding instructions, project context, or a description that an AI assistant will see at the top of the file.
 
 ## 📄 Output Format
 
