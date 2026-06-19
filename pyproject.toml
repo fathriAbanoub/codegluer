@@ -23,6 +23,9 @@ dependencies = [
     "pathspec>=0.11.0",
 ]
 
+[project.optional-dependencies]
+ai = ["tiktoken>=0.5.0"]
+
 [project.scripts]
 codegluer = "codegluer.cli:main"
 

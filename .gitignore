@@ -49,3 +49,5 @@ Thumbs.db
 # ==========================================================
 glued_code.txt
 glued_code.md
+__pycache__/
+*.pyc
