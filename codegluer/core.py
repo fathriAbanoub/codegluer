@@ -12,6 +12,7 @@ logger.addHandler(logging.NullHandler())
 
 SEPARATOR_CHAR = "="
 SEPARATOR_LENGTH = 70
+STDOUT_SENTINEL = "-"
 
 EXT_TO_LANG = {
     ".py": "python", ".js": "javascript", ".ts": "typescript", ".jsx": "jsx", ".tsx": "tsx",
@@ -146,6 +147,15 @@ def _is_ignored_by_specs(file_abs_str, gitignore_specs):
         except ValueError:
             continue
     return False
+
+def _is_likely_binary(filepath: Path, sample_bytes: int = 8192) -> bool:
+    """Return True if the file appears to be binary (contains null bytes in first sample_bytes)."""
+    try:
+        with open(filepath, "rb") as f:
+            chunk = f.read(sample_bytes)
+        return b"\x00" in chunk
+    except Exception:
+        return False
 
 # ─────────────────────────────────────────────────────────────────────
 # TreeNode + Tree Builder + Tree Renderer
@@ -388,33 +398,15 @@ def collect_files(
     return collected
 
 # ─────────────────────────────────────────────────────────────────────
-# glue_files (with GlueConfig support + backward compatibility)
+# glue_files (with GlueConfig support)
 # ─────────────────────────────────────────────────────────────────────
 
-def glue_files(
-    paths,
-    config: GlueConfig | None = None,
-    # ── Legacy keyword arguments for backward compatibility ──
-    output_path=None,
-    output_format="plain",
-    recursive=False,
-    respect_gitignore=False,
-    exclude_patterns=None,
-    include_patterns=None,
-):
+def glue_files(paths, config: GlueConfig | None = None) -> tuple[str, int]:
     # Ensure paths can be iterated multiple times (e.g., if a generator is passed)
     paths = list(paths)
 
-    # Build config: if config is provided, use it; otherwise build from legacy kwargs
     if config is None:
-        config = GlueConfig(
-            output_path=output_path,
-            output_format=output_format,
-            recursive=recursive,
-            respect_gitignore=respect_gitignore,
-            exclude_patterns=exclude_patterns or [],
-            include_patterns=include_patterns or [],
-        )
+        config = GlueConfig()
 
     if config.output_format not in ("plain", "markdown"):
         raise ValueError(f"Invalid output_format: {config.output_format!r}. Must be 'plain' or 'markdown'.")
@@ -477,6 +469,10 @@ def glue_files(
     for filepath in file_paths:
         if not filepath.is_file():
             logger.warning(f"Skipping '{filepath}' (not a regular file).")
+            continue
+            
+        if _is_likely_binary(filepath):
+            logger.warning(f"Skipping '{filepath}' (appears to be a binary file).")
             continue
 
         # --- display_name (unchanged logic) ---
@@ -576,7 +572,7 @@ def glue_files(
             token_count = len(enc.encode(full_text_preview))
             method = "tiktoken"
         except ImportError:
-            token_count = int(len(full_text_preview) / 3.0)
+            token_count = int(len(full_text_preview) / 4.0)
             method = "estimated (tiktoken not installed)"
 
         if token_count < 8_000:
@@ -601,6 +597,11 @@ def glue_files(
     all_blocks = header_blocks + sections + footer_blocks
     sep_char = "\n\n" if config.output_format == "markdown" else "\n"
     glued_content = sep_char.join(all_blocks)
+
+    if output_path == STDOUT_SENTINEL:
+        import sys
+        sys.stdout.write(glued_content)
+        return STDOUT_SENTINEL, success_count
 
     try:
         with open(output_path, "w", encoding="utf-8") as f:
