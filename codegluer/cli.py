@@ -9,8 +9,8 @@ def non_negative_int(value):
     """Argparse type for non-negative integers (>= 0)."""
     try:
         ivalue = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"{value} is not a valid integer")
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(f"{value} is not a valid integer") from err
     if ivalue < 0:
         raise argparse.ArgumentTypeError(f"{value} is not a non-negative integer")
     return ivalue
@@ -20,8 +20,8 @@ def positive_int(value):
     """Argparse type for positive integers (> 0)."""
     try:
         ivalue = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"{value} is not a valid integer")
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(f"{value} is not a valid integer") from err
     if ivalue <= 0:
         raise argparse.ArgumentTypeError(f"{value} is not a positive integer")
     return ivalue
@@ -37,7 +37,8 @@ def main():
         "-v", "--version", action="version", version=f"CodeGluer {__version__}"
     )
     parser.add_argument("paths", nargs="+", help="Paths to files or directories.")
-    parser.add_argument("-o", "--output", default=None, help="Output file path.")
+    parser.add_argument("-o", "--output", default=None,
+        help="Output file path. Use '-' to write to stdout.")
     parser.add_argument(
         "--format", choices=["plain", "markdown"], default="plain",
         help="Output format: 'plain' (separator markers) or 'markdown' (code blocks)."
@@ -113,7 +114,8 @@ def main():
         )
 
         output_path, count = glue_files(paths=args.paths, config=config)
-        print(f"✅ Glued {count} file(s) into: {output_path}")
+        if output_path != "-":
+            print(f"✅ Glued {count} file(s) into: {output_path}")
     except CodeGluerError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
