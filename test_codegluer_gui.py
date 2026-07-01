@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import shutil
+from pathlib import Path  # <-- added for clean Path usage
 
 # Import the module under test
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -191,9 +192,8 @@ if __name__ == "__main__":
     print("✓ Test 10: is_any_dir detection")
 
     # ──────────────────────────────────────────────────────────────────────
-    # Test 11: theme save/read roundtrip
+    # Test 11: theme save/read roundtrip — clean Path usage
     # ──────────────────────────────────────────────────────────────────────
-    cg.CONFIG_DIR = Path = __import__("pathlib").Path
     cg.CONFIG_DIR = Path(TMP) / "config" / "codegluer"
     cg.CONFIG_FILE = cg.CONFIG_DIR / "theme"
     cg.save_theme("roselle")

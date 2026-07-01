@@ -427,7 +427,7 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             # Use absolute path for codegluer (fallback to ~/.local/bin)
             codegluer_path = shutil.which("codegluer") or os.path.expanduser("~/.local/bin/codegluer")
             # Build command and replace the executable with absolute path
-            cmd = [codegluer_path] + build_command(self.files, opts)[1:]
+            cmd = [codegluer_path, *build_command(self.files, opts)[1:]]
 
             if self.dry_run:
                 print("\n".join(cmd))
@@ -436,12 +436,15 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
 
             save_theme(self.current_theme)
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                # Add timeout to avoid UI freeze (fix 1)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
                 if result.returncode == 0:
                     output_name = opts["output"] or default_name(self.target_dir, opts["format"])
                     self._notify("CodeGluer", f"Created: {output_name}")
                 else:
                     self._notify("CodeGluer", f"Failed: {result.stderr.strip()}")
+            except subprocess.TimeoutExpired:
+                self._notify("CodeGluer", "Failed: command timed out after 60 seconds")
             except Exception as e:
                 self._notify("CodeGluer", f"Error: {e}")
             self.close()
