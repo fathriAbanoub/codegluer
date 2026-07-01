@@ -29,6 +29,24 @@ Perfect for sharing code context with AI assistants, code reviews, documentation
 - ⏱️ **Auto‑Timestamping** – Prevents accidental overwrites for default outputs by appending microsecond timestamps (explicit `--output` paths will still overwrite).
 - 📤 **Pipe to stdout** – Use `-o -` to write the glued content to standard output for piping to other tools.
 
+## 🖼️ See it in action
+
+**Smart GUI adapts to your selection:**
+
+_When selecting files (directory-only options hidden):_
+
+![GUI for files](screenshots/gui-roselle-files.png)
+
+_When selecting a directory (Tree, TOC, .gitignore appear):_
+
+![GUI for directory](screenshots/gui-roselle-directory.png)
+
+**Clean, pasteable output:**
+
+_Shows stats, tree, TOC, and syntax-highlighted code:_
+
+![Markdown output](screenshots/output-markdown.png)
+
 ## 🐧 Why CodeGluer?
 
 Most context-prep tools are built for macOS or run in VS Code. CodeGluer is built for **Linux desktop users**:
