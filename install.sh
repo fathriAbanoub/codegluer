@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
-#  CodeGluer – Installer
-#  Sets up the Python package and right-click context menus.
+#  CodeGluer GUI – Installer
+#  Sets up the Python package and GTK4 right-click context menus.
 # ============================================================
 
 set -euo pipefail
@@ -16,12 +16,25 @@ NC='\033[0m'
 
 echo -e "${CYAN}"
 echo "╔══════════════════════════════════════════╗"
-echo "║         CodeGluer – Installer            ║"
+echo "║      CodeGluer GUI – Installer           ║"
 echo "╚══════════════════════════════════════════╝"
 echo -e "${NC}"
 
 # ----------------------------------------------------------
-# 1. Install the Python package
+# 1. Check for GTK4 Python bindings (moved earlier)
+# ----------------------------------------------------------
+echo -e "${YELLOW}➜ Checking GTK4 Python bindings...${NC}"
+if python3 -c "import gi; gi.require_version('Gtk', '4.0')" 2>/dev/null; then
+    echo -e "  ${GREEN}✔ GTK4 Python bindings available.${NC}"
+else
+    echo -e "  ${RED}✘ GTK4 Python bindings (PyGObject) not found.${NC}"
+    echo -e "  ${YELLOW}  Install with: sudo apt install python3-gi gir1.2-gtk-4.0${NC}"
+    echo -e "  ${YELLOW}  (or your distro's equivalent)${NC}"
+    exit 1
+fi
+
+# ----------------------------------------------------------
+# 2. Install the Python package (codegluer CLI)
 # ----------------------------------------------------------
 echo -e "${YELLOW}➜ Installing CodeGluer Python package...${NC}"
 if command -v pipx &>/dev/null; then
@@ -33,7 +46,7 @@ else
     echo -e "  ${GREEN}✔ Installed via pip --user.${NC}"
 fi
 
-# Ensure ~/.local/bin is on PATH (warn if not)
+# Ensure ~/.local/bin is on PATH
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
     echo -e "  ${YELLOW}⚠ ~/.local/bin is not on your PATH."
     echo -e "     Add this line to your ~/.bashrc or ~/.zshrc:"
@@ -41,147 +54,59 @@ if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
 fi
 
 # ----------------------------------------------------------
-# 2. Nautilus integration (GNOME)
+# 3. Install the GUI script
+# ----------------------------------------------------------
+echo -e "${YELLOW}➜ Installing CodeGluer GUI script...${NC}"
+GUI_SRC="$SCRIPT_DIR/codegluer_gui.py"
+GUI_DEST="$HOME/.local/bin/codegluer-gui"
+
+if [[ ! -f "$GUI_SRC" ]]; then
+    echo -e "${RED}✘ codegluer_gui.py not found next to install.sh.${NC}" >&2
+    exit 1
+fi
+
+# Ensure target directory exists
+mkdir -p "$(dirname "$GUI_DEST")"
+
+cp -f "$GUI_SRC" "$GUI_DEST"
+chmod +x "$GUI_DEST"
+echo -e "  ${GREEN}✔ Installed: $GUI_DEST${NC}"
+
+# ----------------------------------------------------------
+# 4. Nautilus integration (GNOME) — script in ~/.local/share/nautilus/scripts/
 # ----------------------------------------------------------
 NAUTILUS_SCRIPT_DIR="$HOME/.local/share/nautilus/scripts"
 echo -e "${YELLOW}➜ Setting up Nautilus right-click integration...${NC}"
 mkdir -p "$NAUTILUS_SCRIPT_DIR"
 
-create_nautilus_script() {
-    local name="$1"
-    local format="$2"
-    local script_path="$NAUTILUS_SCRIPT_DIR/$name"
-
-    cat > "$script_path" << 'NAUTILUS_EOF'
+cat > "$NAUTILUS_SCRIPT_DIR/CodeGluer" << 'NAUTILUS_EOF'
 #!/usr/bin/env bash
-# Nautilus script – "Glue Code Files"
-
-# 🧠 Robust PATH resolution (GUI shells don't source .bashrc)
-GLUER="$HOME/.local/bin/codegluer"
-if [ ! -x "$GLUER" ]; then
-    GLUER="codegluer"
-    if ! command -v "$GLUER" &>/dev/null; then
-        notify-send "CodeGluer" "Error: CodeGluer not found in PATH" --icon=dialog-error
-        exit 1
-    fi
-fi
-
-# Collect selected files
-FILES=()
-while IFS= read -r file; do
-    [ -n "$file" ] && FILES+=("$file")
-done <<< "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"
-
-if [ ${#FILES[@]} -eq 0 ]; then
-    notify-send "CodeGluer" "No files selected." --icon=dialog-warning
-    exit 1
-fi
-
-# Smart GUI: automatically add -r if a folder is selected
-RECURSIVE_FLAG=""
-for file in "${FILES[@]}"; do
-    if [ -d "$file" ]; then
-        RECURSIVE_FLAG="-r"
-        break
-    fi
-done
-
-OUTPUT=$("$GLUER" "${FILES[@]}" $RECURSIVE_FLAG --format FORMAT_PLACEHOLDER 2>&1)
-EXIT_CODE=$?
-
-if [ $EXIT_CODE -eq 0 ]; then
-    notify-send "CodeGluer" "$OUTPUT" --icon=dialog-information
-else
-    notify-send "CodeGluer" "Error: $OUTPUT" --icon=dialog-error
-fi
+# Nautilus script — launches CodeGluer GUI with selected files.
+# Nautilus passes paths via env var (newline-separated), not positional args.
+IFS=$'\n' read -r -d '' -a files <<< "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"
+exec "$HOME/.local/bin/codegluer-gui" "${files[@]}"
 NAUTILUS_EOF
-
-    # Safe replacement that works on Linux & macOS (with error handling)
-    tmp_file=$(mktemp)
-    if sed "s/FORMAT_PLACEHOLDER/$format/g" "$script_path" > "$tmp_file"; then
-        mv "$tmp_file" "$script_path"
-        chmod +x "$script_path"
-        echo -e "  ${GREEN}✔ Nautilus script: $name${NC}"
-    else
-        rm -f "$tmp_file"
-        echo -e "  ${RED}✘ Failed to process $script_path${NC}" >&2
-        exit 1
-    fi
-}
-
-create_nautilus_script "Glue Code Files (Plain)" "plain"
-create_nautilus_script "Glue Code Files (Markdown)" "markdown"
+chmod +x "$NAUTILUS_SCRIPT_DIR/CodeGluer"
+echo -e "  ${GREEN}✔ Nautilus script: CodeGluer${NC}"
 
 # ----------------------------------------------------------
-# 3. Nemo integration (Cinnamon)
+# 5. Nemo integration (Cinnamon) — .nemo_action file
 # ----------------------------------------------------------
 if command -v nemo &>/dev/null; then
-    echo -e "${YELLOW}➜ Nemo detected – setting up Nemo actions...${NC}"
+    echo -e "${YELLOW}➜ Nemo detected – setting up Nemo action...${NC}"
     NEMO_ACTION_DIR="$HOME/.local/share/nemo/actions"
     mkdir -p "$NEMO_ACTION_DIR"
 
-    create_nemo_action() {
-        local label="$1"
-        local format="$2"
-        local action_file="$NEMO_ACTION_DIR/codegluer-${format}.nemo_action"
-        local wrapper_file="$NEMO_ACTION_DIR/codegluer-nemo-${format}.sh"
-
-        cat > "$wrapper_file" << 'NEMO_WRAPPER_EOF'
-#!/usr/bin/env bash
-# 🧠 Robust PATH resolution (GUI shells don't source .bashrc)
-GLUER="$HOME/.local/bin/codegluer"
-if [ ! -x "$GLUER" ]; then
-    GLUER="codegluer"
-    if ! command -v "$GLUER" &>/dev/null; then
-        notify-send "CodeGluer" "Error: CodeGluer not found in PATH" --icon=dialog-error
-        exit 1
-    fi
-fi
-
-# Smart GUI: automatically add -r if a folder is selected
-RECURSIVE_FLAG=""
-for arg in "$@"; do
-    if [ -d "$arg" ]; then
-        RECURSIVE_FLAG="-r"
-        break
-    fi
-done
-
-OUTPUT=$("$GLUER" "$@" $RECURSIVE_FLAG --format FORMAT_PLACEHOLDER 2>&1)
-EXIT_CODE=$?
-
-if [ $EXIT_CODE -eq 0 ]; then
-    notify-send "CodeGluer" "$OUTPUT" --icon=dialog-information
-else
-    notify-send "CodeGluer" "Error: $OUTPUT" --icon=dialog-error
-fi
-NEMO_WRAPPER_EOF
-
-        # Safe replacement with error handling
-        tmp_file=$(mktemp)
-        if sed "s/FORMAT_PLACEHOLDER/$format/g" "$wrapper_file" > "$tmp_file"; then
-            mv "$tmp_file" "$wrapper_file"
-            chmod +x "$wrapper_file"
-        else
-            rm -f "$tmp_file"
-            echo -e "  ${RED}✘ Failed to process $wrapper_file${NC}" >&2
-            exit 1
-        fi
-
-        cat > "$action_file" << EOF
+    cat > "$NEMO_ACTION_DIR/codegluer.nemo_action" <<EOF
 [Nemo Action]
-Name=$label
-Comment=Glue selected files into a single file ($format)
-Exec=$wrapper_file %F
+Name=CodeGluer
+Comment=Glue selected files/folders into a single file (GTK4 dialog)
+Exec=$HOME/.local/bin/codegluer-gui %F
 Icon-Name=text-x-generic
 Selection=notnone
 Extensions=any;
 EOF
-        echo -e "  ${GREEN}✔ Nemo action: $label${NC}"
-    }
-
-    create_nemo_action "Glue Code Files (Plain)" "plain"
-    create_nemo_action "Glue Code Files (Markdown)" "markdown"
+    echo -e "  ${GREEN}✔ Nemo action: CodeGluer${NC}"
 else
     echo -e "  ${YELLOW}ℹ  Nemo not detected – skipping.${NC}"
 fi
@@ -192,11 +117,13 @@ echo -e "${GREEN}  Installation complete! 🎉${NC}"
 echo -e "${GREEN}══════════════════════════════════════════${NC}"
 echo ""
 echo "  How to use:"
-echo "  1. Open your file manager (Nautilus / Nemo)"
-echo "  2. Select files or folders"
-echo "  3. Right-click → Scripts → Glue Code Files (Plain/Markdown)"
-echo "  4. A 'glued_code.txt' or 'glued_code.md' will appear"
+echo "    1. Open your file manager (Nautilus / Nemo)"
+echo "    2. Select files or folders"
+echo "    3. Right-click → Scripts → CodeGluer  (Nautilus)"
+echo "       Right-click → CodeGluer             (Nemo)"
+echo "    4. Configure options in the GTK4 dialog"
 echo ""
 echo "  Terminal usage:"
-echo "    codegluer file1.py file2.js --format markdown -o output.md"
+echo "    codegluer-gui file1.py file2.js"
+echo "    codegluer-gui --dry-run src/   (print command, don't run)"
 echo ""
