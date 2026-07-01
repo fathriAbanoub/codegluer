@@ -1,19 +1,15 @@
+## `tests/test_codegluer_gui.py`
+
 """
 pytest suite for codegluer_gui logic. No GTK required.
 
 Run: pytest tests/
 """
 
+import os
 import pytest
 from pathlib import Path
 import codegluer_gui as cg
-
-
-# ---- helpers for command-list assertions -----------------------------------
-
-def contains(cmd, item):
-    """Return True if item is a substring of any element in cmd."""
-    return any(item in str(x) for x in cmd)
 
 
 # ---- test functions --------------------------------------------------------
@@ -35,23 +31,25 @@ def test_build_command_markdown_dir_all_flags(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(src)], opts)
-    assert contains(cmd, "codegluer")
-    assert contains(cmd, str(src))
-    assert contains(cmd, "-r")
-    assert contains(cmd, "--format")
-    assert contains(cmd, "markdown")
-    assert contains(cmd, "--tree")
-    assert contains(cmd, "--stats")
-    assert contains(cmd, "--toc")
-    assert contains(cmd, "--estimate-tokens")
-    assert contains(cmd, "--respect-gitignore")
-    assert contains(cmd, "--exclude")
-    assert contains(cmd, "foo")
-    assert contains(cmd, "bar")
-    assert contains(cmd, "-o")
-    assert contains(cmd, str(tmp_path / "out.md"))
-    assert not contains(cmd, "--estimate_tokens")    # hyphen not underscore
-    assert not contains(cmd, "--respect_gitignore")  # hyphen not underscore
+    # Exact token checks
+    assert cmd[0] == "codegluer"
+    assert str(src) in cmd
+    assert "-r" in cmd
+    assert "--format" in cmd
+    assert "markdown" in cmd
+    assert "--tree" in cmd
+    assert "--stats" in cmd
+    assert "--toc" in cmd
+    assert "--estimate-tokens" in cmd
+    assert "--respect-gitignore" in cmd
+    assert "--exclude" in cmd
+    assert "foo" in cmd
+    assert "bar" in cmd
+    assert "-o" in cmd
+    assert str(tmp_path / "out.md") in cmd
+    # Ensure flags use hyphens, not underscores
+    assert "--estimate_tokens" not in cmd
+    assert "--respect_gitignore" not in cmd
 
 
 def test_build_command_plain_empty_output_defaults_to_txt(tmp_path):
@@ -67,11 +65,11 @@ def test_build_command_plain_empty_output_defaults_to_txt(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(src)], opts)
-    assert contains(cmd, "Glued_Code.txt")
-    assert not contains(cmd, "Glued_Code.md")
-    assert contains(cmd, "-r")
-    assert contains(cmd, "--format")
-    assert contains(cmd, "plain")
+    assert "Glued_Code.txt" in cmd
+    assert "Glued_Code.md" not in cmd
+    assert "-r" in cmd
+    assert "--format" in cmd
+    assert "plain" in cmd
 
 
 def test_build_command_markdown_empty_output_defaults_to_md(tmp_path):
@@ -87,7 +85,7 @@ def test_build_command_markdown_empty_output_defaults_to_md(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(src)], opts)
-    assert contains(cmd, "Glued_Code.md")
+    assert "Glued_Code.md" in cmd
 
 
 def test_default_name_single_collision_appends_1(tmp_path):
@@ -105,10 +103,8 @@ def test_default_name_collision_cap_falls_back_to_pid(tmp_path):
         (tmp_path / f"Glued_Code_{i}.md").touch()
 
     name = cg.default_name(str(tmp_path), "markdown")
-    assert name.startswith("Glued_Code_")
-    assert name.endswith(".md")
-    # It should not be Glued_Code_100.md; it should be a PID-based name
-    assert "_" in name and not name.endswith("_100.md")
+    expected = f"Glued_Code_{os.getpid()}.md"
+    assert name == expected
 
 
 def test_build_command_files_only_no_recursive_flags(tmp_path):
@@ -127,12 +123,12 @@ def test_build_command_files_only_no_recursive_flags(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(standalone)], opts)
-    assert not contains(cmd, "-r")
-    assert not contains(cmd, "--tree")
-    assert not contains(cmd, "--toc")
-    assert not contains(cmd, "--respect-gitignore")
-    assert contains(cmd, "--stats")
-    assert contains(cmd, "--estimate-tokens")
+    assert "-r" not in cmd
+    assert "--tree" not in cmd
+    assert "--toc" not in cmd
+    assert "--respect-gitignore" not in cmd
+    assert "--stats" in cmd
+    assert "--estimate-tokens" in cmd
 
 
 def test_target_dir_of_bare_filename():
@@ -152,8 +148,8 @@ def test_build_command_custom_output_name_respected(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(src)], opts)
-    assert contains(cmd, "Glued_Code_custom.md")
-    assert not contains(cmd, "Glued_Code_1.md")
+    assert "Glued_Code_custom.md" in cmd
+    assert "Glued_Code_1.md" not in cmd
 
 
 def test_build_command_exclude_comma_separated(tmp_path):
@@ -169,9 +165,9 @@ def test_build_command_exclude_comma_separated(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(src)], opts)
-    assert contains(cmd, "--exclude")
-    assert contains(cmd, "foo.py")
-    assert contains(cmd, "bar.py")
+    assert "--exclude" in cmd
+    assert "foo.py" in cmd
+    assert "bar.py" in cmd
 
 
 def test_is_any_dir_detection(tmp_path):
@@ -206,7 +202,6 @@ def test_theme_missing_config_fallback_auto(tmp_path, monkeypatch):
     config_dir = tmp_path / "config" / "codegluer"
     monkeypatch.setattr(cg, "CONFIG_DIR", config_dir)
     theme_file = config_dir / "theme"
-    # Ensure file does not exist
     if theme_file.exists():
         theme_file.unlink()
     monkeypatch.setattr(cg, "CONFIG_FILE", theme_file)
@@ -238,7 +233,7 @@ def test_build_command_no_excludes_no_flag(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(src)], opts)
-    assert not contains(cmd, "--exclude")
+    assert "--exclude" not in cmd
 
 
 def test_build_command_toc_passed_for_markdown(tmp_path):
@@ -257,7 +252,7 @@ def test_build_command_toc_passed_for_markdown(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(src)], opts)
-    assert contains(cmd, "--toc")
+    assert "--toc" in cmd
 
 
 def test_build_command_toc_absent_for_plain(tmp_path):
@@ -276,7 +271,7 @@ def test_build_command_toc_absent_for_plain(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(src)], opts)
-    assert not contains(cmd, "--toc")
+    assert "--toc" not in cmd
 
 
 def test_build_command_multiple_files(tmp_path):
@@ -296,8 +291,8 @@ def test_build_command_multiple_files(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(f1), str(f2)], opts)
-    assert contains(cmd, str(f1))
-    assert contains(cmd, str(f2))
+    assert str(f1) in cmd
+    assert str(f2) in cmd
 
 
 def test_should_update_default_markdown_true(tmp_path):

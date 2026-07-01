@@ -140,6 +140,8 @@ codegluer-gui --dry-run src/
 
 This opens the same GTK4 dialog, letting you configure options and glue files interactively.
 
+> **Note:** The `codegluer-gui` command is installed by `install.sh` alongside the Python package. It is **not** a separate entry point in `pyproject.toml`; it is a standalone script placed in `~/.local/bin/` during installation.
+
 ## 🧠 Smart CLI Behaviors
 
 - **Auto‑Timestamping:** For the default output (when no `--output` is specified), if the default output file already exists, CodeGluer appends a timestamp with microseconds to prevent overwrites. When you explicitly provide an output path with `--output` or `-o`, any existing file at that path will be overwritten without timestamp protection.
@@ -204,7 +206,7 @@ codegluer/
 ├── LICENSE
 ├── install.sh                   # Installs package via pipx/pip & sets up GUI integrations
 ├── uninstall.sh                 # Removes package & GUI integrations
-├── codegluer_gui.py             # GTK4 GUI application (standalone script)
+├── codegluer_gui.py             # GTK4 GUI application (executable script and importable module)
 ├── codegluer/                   # The core Python package
 │   ├── __init__.py
 │   ├── core.py                  # Gluing logic, file collection, and filtering
@@ -246,13 +248,13 @@ sequenceDiagram
     GUI->>CLI: subprocess.run(cmd, timeout=60)
     alt Success (returncode == 0)
         CLI-->>GUI: returncode=0
-        GUI->>Notify: notify-send "Created: output.md"
-    else Failure (returncode != 0)
+        GUI->>Notify: notify-send "Created: {output_name}"
+    else Non‑zero returncode
         CLI-->>GUI: returncode=1, stderr
-        GUI->>Notify: notify-send "Failed: {error}"
-    else Timeout (60s)
-        CLI-->>GUI: TimeoutExpired
-        GUI->>Notify: notify-send "Failed: timed out"
+        GUI->>Notify: notify-send "Failed: {stderr}"
+    else Exception (including timeout)
+        CLI-->>GUI: raises Exception
+        GUI->>Notify: notify-send "Error: {exception}"
     end
     GUI->>GUI: close window
 ```
