@@ -40,3 +40,4 @@ packages = ["codegluer"]
 minversion = "7.0"
 testpaths = ["tests"]
 addopts = "-v --tb=short --strict-markers"
+pythonpath = ["."]   # <-- added so pytest finds the project modules
