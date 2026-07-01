@@ -18,8 +18,8 @@ Usage:
 
 import os
 import sys
-import json
 import subprocess
+import shutil
 from pathlib import Path
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))) / "codegluer"
@@ -88,7 +88,7 @@ def build_command(files: list[str], opts: dict) -> list[str]:
     if not output:
         output = default_name(target_dir, fmt)
 
-    cmd = ["codegluer"] + files
+    cmd = ["codegluer", *files]
     cmd += ["--format", fmt]
     if any_dir:
         cmd += ["-r"]
@@ -96,7 +96,7 @@ def build_command(files: list[str], opts: dict) -> list[str]:
         cmd += ["--tree"]
     if opts.get("stats"):
         cmd += ["--stats"]
-    if opts.get("toc") and any_dir:
+    if opts.get("toc") and any_dir and fmt == "markdown":
         cmd += ["--toc"]
     if opts.get("estimate_tokens"):
         cmd += ["--estimate-tokens"]
@@ -217,6 +217,9 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             self.theme_dropdown = None
             self.checkboxes = {}
 
+            # Reusable CSS provider (fix leak)
+            self._css_provider = None
+
             self._build_ui()
             self._apply_theme(self.current_theme)
 
@@ -336,6 +339,9 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
                 self.output_entry.set_text(
                     default_name(self.target_dir, self.format)
                 )
+            # TOC is markdown-only → clear checkbox when switching to plain
+            if self.format == "plain" and "toc" in self.checkboxes:
+                self.checkboxes["toc"].set_active(False)
 
         def _on_theme_dropdown_changed(self, dropdown, _param):
             # Only real themes (light/dark/roselle) enable Apply. "auto" grays it.
@@ -354,11 +360,14 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             css_text = theme_css(theme)
             if not css_text:
                 return
-            provider = Gtk.CssProvider()
-            provider.load_from_data(css_text.encode())
+            display = Gdk.Display.get_default()
+            if self._css_provider:
+                Gtk.StyleContext.remove_provider_for_display(display, self._css_provider)
+            self._css_provider = Gtk.CssProvider()
+            self._css_provider.load_from_data(css_text.encode())
             Gtk.StyleContext.add_provider_for_display(
-                Gdk.Display.get_default(),
-                provider,
+                display,
+                self._css_provider,
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
 
@@ -384,14 +393,21 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             # Exclude validation: space without comma
             excludes = opts["excludes"].strip()
             if excludes and " " in excludes and "," not in excludes:
-                dialog = Gtk.AlertDialog()
-                dialog.set_message("Exclude patterns contain spaces but no commas")
-                dialog.set_detail(
-                    f'You entered: "{excludes}"\n\n'
-                    "Patterns are comma-separated. Replace spaces with commas?"
-                )
-                dialog.set_buttons(["Cancel", "Keep as-is", "Fix it"])
-                dialog.choose(self, None, self._on_exclude_dialog_response, opts)
+                # Gtk.AlertDialog requires GTK 4.10+
+                gtk_version = (Gtk.get_major_version(), Gtk.get_minor_version())
+                if gtk_version >= (4, 10):
+                    dialog = Gtk.AlertDialog()
+                    dialog.set_message("Exclude patterns contain spaces but no commas")
+                    dialog.set_detail(
+                        f'You entered: "{excludes}"\n\n'
+                        "Patterns are comma-separated. Replace spaces with commas?"
+                    )
+                    dialog.set_buttons(["Cancel", "Keep as-is", "Fix it"])
+                    dialog.choose(self, None, self._on_exclude_dialog_response, opts)
+                else:
+                    # Fallback for older GTK: auto-fix without asking
+                    opts["excludes"] = excludes.replace(" ", ",")
+                    self._execute(opts)
                 return
 
             self._execute(opts)
@@ -408,7 +424,10 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             self._execute(opts)
 
         def _execute(self, opts):
-            cmd = build_command(self.files, opts)
+            # Use absolute path for codegluer (fallback to ~/.local/bin)
+            codegluer_path = shutil.which("codegluer") or os.path.expanduser("~/.local/bin/codegluer")
+            # Build command and replace the executable with absolute path
+            cmd = [codegluer_path] + build_command(self.files, opts)[1:]
 
             if self.dry_run:
                 print("\n".join(cmd))

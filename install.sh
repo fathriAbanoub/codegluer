@@ -21,7 +21,20 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 
 # ----------------------------------------------------------
-# 1. Install the Python package (codegluer CLI)
+# 1. Check for GTK4 Python bindings (moved earlier)
+# ----------------------------------------------------------
+echo -e "${YELLOW}➜ Checking GTK4 Python bindings...${NC}"
+if python3 -c "import gi; gi.require_version('Gtk', '4.0')" 2>/dev/null; then
+    echo -e "  ${GREEN}✔ GTK4 Python bindings available.${NC}"
+else
+    echo -e "  ${RED}✘ GTK4 Python bindings (PyGObject) not found.${NC}"
+    echo -e "  ${YELLOW}  Install with: sudo apt install python3-gi gir1.2-gtk-4.0${NC}"
+    echo -e "  ${YELLOW}  (or your distro's equivalent)${NC}"
+    exit 1
+fi
+
+# ----------------------------------------------------------
+# 2. Install the Python package (codegluer CLI)
 # ----------------------------------------------------------
 echo -e "${YELLOW}➜ Installing CodeGluer Python package...${NC}"
 if command -v pipx &>/dev/null; then
@@ -41,19 +54,6 @@ if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
 fi
 
 # ----------------------------------------------------------
-# 2. Check for GTK4 Python bindings
-# ----------------------------------------------------------
-echo -e "${YELLOW}➜ Checking GTK4 Python bindings...${NC}"
-if python3 -c "import gi; gi.require_version('Gtk', '4.0')" 2>/dev/null; then
-    echo -e "  ${GREEN}✔ GTK4 Python bindings available.${NC}"
-else
-    echo -e "  ${RED}✘ GTK4 Python bindings (PyGObject) not found.${NC}"
-    echo -e "  ${YELLOW}  Install with: sudo apt install python3-gi gir1.2-gtk-4.0${NC}"
-    echo -e "  ${YELLOW}  (or your distro's equivalent)${NC}"
-    exit 1
-fi
-
-# ----------------------------------------------------------
 # 3. Install the GUI script
 # ----------------------------------------------------------
 echo -e "${YELLOW}➜ Installing CodeGluer GUI script...${NC}"
@@ -64,6 +64,9 @@ if [[ ! -f "$GUI_SRC" ]]; then
     echo -e "${RED}✘ codegluer_gui.py not found next to install.sh.${NC}" >&2
     exit 1
 fi
+
+# Ensure target directory exists
+mkdir -p "$(dirname "$GUI_DEST")"
 
 cp -f "$GUI_SRC" "$GUI_DEST"
 chmod +x "$GUI_DEST"
@@ -81,7 +84,7 @@ cat > "$NAUTILUS_SCRIPT_DIR/CodeGluer" << 'NAUTILUS_EOF'
 # Nautilus script — launches CodeGluer GUI with selected files.
 # Nautilus passes paths via env var (newline-separated), not positional args.
 IFS=$'\n' read -r -d '' -a files <<< "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"
-exec codegluer-gui "${files[@]}"
+exec "$HOME/.local/bin/codegluer-gui" "${files[@]}"
 NAUTILUS_EOF
 chmod +x "$NAUTILUS_SCRIPT_DIR/CodeGluer"
 echo -e "  ${GREEN}✔ Nautilus script: CodeGluer${NC}"
@@ -98,7 +101,7 @@ if command -v nemo &>/dev/null; then
 [Nemo Action]
 Name=CodeGluer
 Comment=Glue selected files/folders into a single file (GTK4 dialog)
-Exec=codegluer-gui %F
+Exec=$HOME/.local/bin/codegluer-gui %F
 Icon-Name=text-x-generic
 Selection=notnone
 Extensions=any;
