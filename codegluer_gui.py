@@ -25,6 +25,44 @@ from pathlib import Path
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))) / "codegluer"
 CONFIG_FILE = CONFIG_DIR / "theme"
 
+# FIX (2026-07-04): freeze bug — opening the Browse file picker with its
+# initial folder pointed at a directory containing node_modules/.next/etc.
+# made the native GTK/portal file dialog try to enumerate and thumbnail
+# everything in it, hanging so badly a full system restart was required
+# (confirmed via journalctl — no clean OOM-kill, i.e. swap-thrash-to-freeze,
+# not a normal crash). _looks_heavy() below is the guard against this.
+# Do not remove it or re-add an unconditional set_initial_folder/
+# set_current_folder call using self.target_dir.
+#
+# Mirrors codegluer.core.DEFAULT_IGNORE_DIR_NAMES, duplicated (not imported) so
+# this script keeps working standalone in ~/.local/bin without the package
+# import path. Used only to avoid pointing a file dialog's initial folder at
+# something that will make it hang while enumerating/thumbnailing.
+_HEAVY_DIR_HINTS = {
+    "node_modules", ".git", ".next", ".nuxt", "dist", "build",
+    "__pycache__", ".venv", "venv", "target", ".cache", "vendor",
+}
+
+
+def _looks_heavy(path: str, scan_limit: int = 500) -> bool:
+    """Cheap heuristic, not a full walk: does this directory contain a known
+    dependency/build folder, or an unusually large number of direct entries?
+    Opening a native file picker's initial folder inside something like
+    node_modules is a known way to freeze GTK file choosers while they
+    enumerate and thumbnail everything — this just avoids that trigger."""
+    try:
+        with os.scandir(path) as it:
+            count = 0
+            for entry in it:
+                count += 1
+                if entry.name in _HEAVY_DIR_HINTS and entry.is_dir():
+                    return True
+                if count > scan_limit:
+                    return True
+    except OSError:
+        return False
+    return False
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Pure logic: command builder. No GTK. Fully testable.
@@ -138,6 +176,38 @@ def save_theme(theme: str) -> None:
     CONFIG_FILE.write_text(theme)
 
 
+# Chip styles are theme-independent: dark blue/navy pill with white X close
+# button, matching the reference UI the user provided. The chip-box adapts its
+# background to the surrounding entry styling via per-theme overrides below.
+CHIP_CSS_BASE = """
+    .chip {
+        background: #1e3a5f;
+        color: #ffffff;
+        border-radius: 11px;
+        padding: 2px 4px 2px 10px;
+    }
+    .chip label { color: #ffffff; }
+    .chip-close {
+        background: transparent;
+        color: #ffffff;
+        border-radius: 50%;
+        min-width: 18px;
+        min-height: 18px;
+        padding: 0;
+        margin: 0;
+        box-shadow: none;
+        outline: none;
+    }
+    .chip-close:hover { background: rgba(255, 255, 255, 0.25); }
+    .chip-close:active { background: rgba(255, 255, 255, 0.4); }
+    flowboxchild {
+        outline: none;
+        background: transparent;
+        padding: 0;
+        border-radius: 11px;
+    }
+"""
+
 THEME_CSS = {
     "light": """
         window { background: #ffffff; color: #333333; }
@@ -146,6 +216,7 @@ THEME_CSS = {
         dropdown { background: #f9f9f9; border: 1px solid #ddd; border-radius: 3px; }
         button.suggested-action { background: #C62734; color: white; border-radius: 4px; }
         button { padding: 6px 12px; border-radius: 4px; }
+        .chip-box { background: #f9f9f9; border: 1px solid #ddd; border-radius: 3px; padding: 6px; }
     """,
     "dark": """
         window { background: #2b2b2b; color: #e0e0e0; }
@@ -154,6 +225,7 @@ THEME_CSS = {
         dropdown { background: #3a3a3a; border: 1px solid #555; border-radius: 3px; }
         button.suggested-action { background: #E87672; color: #1a1a1a; border-radius: 4px; }
         button { padding: 6px 12px; border-radius: 4px; }
+        .chip-box { background: #3a3a3a; border: 1px solid #555; border-radius: 3px; padding: 6px; }
     """,
     "roselle": """
         window { background: #1a0a0a; color: #f0d0d0; }
@@ -162,6 +234,7 @@ THEME_CSS = {
         dropdown { background: #2a1515; border: 1px solid #C62734; border-radius: 3px; }
         button.suggested-action { background: #C62734; color: #fff0f0; border-radius: 4px; }
         button { padding: 6px 12px; border-radius: 4px; }
+        .chip-box { background: #2a1515; border: 1px solid #C62734; border-radius: 3px; padding: 6px; }
     """,
 }
 
@@ -182,7 +255,7 @@ def resolve_theme(theme: str) -> str:
 
 def theme_css(theme: str) -> str:
     resolved = resolve_theme(theme)
-    return THEME_CSS.get(resolved, "")
+    return CHIP_CSS_BASE + THEME_CSS.get(resolved, "")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -193,7 +266,11 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
     """Launch the GTK4 dialog. Returns the built command via dry_run or executes it."""
     import gi
     gi.require_version("Gtk", "4.0")
-    from gi.repository import Gtk, Gio, GLib, Gdk
+    # FIX (2026-07-04): EllipsizeMode lives on Pango, not Gtk. A previous pass
+    # wrote `Gtk.EllipsizeMode.END` (see below) which crashes at runtime with
+    # "'gi.repository.Gtk' object has no attribute 'EllipsizeMode'" the moment
+    # a chip is added. Pango must be imported here — do not drop it.
+    from gi.repository import Gtk, Gio, GLib, Gdk, Pango
 
     any_dir = is_any_dir(files)
     target_dir = target_dir_of(files)
@@ -212,13 +289,18 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             # State
             self.format = "markdown"
             self.output_entry = None
-            self.excludes_entry = None
+            self.excludes_entry = None        # kept for backward-compat refs (unused now)
+            self.manual_exclude_entry = None  # manual pattern entry (Enter → chip)
+            self.chip_flowbox = None          # FlowBox holding chip widgets
+            self.excludes: list[str] = []     # canonical list of exclude patterns
             self.format_dropdown = None
             self.theme_dropdown = None
             self.checkboxes = {}
 
             # Reusable CSS provider (fix leak)
             self._css_provider = None
+            # Reference to active file picker so Python GC can't kill it mid-flight
+            self._active_picker = None
 
             self._build_ui()
             self._apply_theme(self.current_theme)
@@ -278,12 +360,50 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             grid.attach(self.output_entry, 1, row, 1, 1)
             row += 1
 
-            # Exclude patterns
-            grid.attach(Gtk.Label(label="Exclude (comma-separated):", halign=Gtk.Align.END), 0, row, 1, 1)
-            self.excludes_entry = Gtk.Entry()
-            self.excludes_entry.set_placeholder_text("e.g., *.pyc, __pycache__, .git")
-            self.excludes_entry.set_hexpand(True)
-            grid.attach(self.excludes_entry, 1, row, 1, 1)
+            # Exclude patterns — chips + manual entry + Browse button.
+            # The Browse button opens a file picker; selected file names are
+            # added as removable chips (matching the reference UI). A manual
+            # entry below the chips lets users still type glob patterns.
+            grid.attach(Gtk.Label(label="Exclude:", halign=Gtk.Align.END, valign=Gtk.Align.START), 0, row, 1, 1)
+
+            exclude_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            exclude_row.set_hexpand(True)
+            exclude_row.set_valign(Gtk.Align.START)
+
+            # Chip container — looks like an entry but holds chips + a manual entry
+            exclude_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            exclude_box.add_css_class("chip-box")
+            exclude_box.set_hexpand(True)
+            exclude_row.append(exclude_box)
+
+            # FlowBox wraps chips nicely across multiple lines
+            self.chip_flowbox = Gtk.FlowBox()
+            self.chip_flowbox.set_selection_mode(Gtk.SelectionMode.NONE)
+            self.chip_flowbox.set_max_children_per_line(20)
+            self.chip_flowbox.set_min_children_per_line(1)
+            self.chip_flowbox.set_column_spacing(4)
+            self.chip_flowbox.set_row_spacing(4)
+            # Hidden when there are no chips, so the box looks clean
+            self.chip_flowbox.set_visible(False)
+            exclude_box.append(self.chip_flowbox)
+
+            # Manual entry — type a glob pattern, press Enter → adds a chip
+            self.manual_exclude_entry = Gtk.Entry()
+            self.manual_exclude_entry.set_placeholder_text(
+                "Type a pattern and press Enter, or click Browse…"
+            )
+            self.manual_exclude_entry.set_hexpand(True)
+            self.manual_exclude_entry.connect("activate", self._on_manual_exclude_activate)
+            exclude_box.append(self.manual_exclude_entry)
+
+            # Browse button — opens a multi-select file picker
+            browse_btn = Gtk.Button(label="Browse…")
+            browse_btn.set_tooltip_text("Select files to exclude")
+            browse_btn.set_valign(Gtk.Align.CENTER)
+            browse_btn.connect("clicked", self._on_browse_clicked)
+            exclude_row.append(browse_btn)
+
+            grid.attach(exclude_row, 1, row, 1, 1)
             row += 1
 
             # Format dropdown
@@ -372,10 +492,16 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             )
 
         def _collect_opts(self):
+            # Combine committed chips with any uncommitted text in the manual entry.
+            excludes_list = list(self.excludes)
+            if self.manual_exclude_entry is not None:
+                pending = self.manual_exclude_entry.get_text().strip()
+                if pending and pending not in excludes_list:
+                    excludes_list.append(pending)
             opts = {
                 "format": self.format,
                 "output": self.output_entry.get_text(),
-                "excludes": self.excludes_entry.get_text(),
+                "excludes": ", ".join(excludes_list),
                 "stats": self.checkboxes["stats"].get_active(),
                 "estimate_tokens": self.checkboxes["estimate_tokens"].get_active(),
                 "any_dir": self.any_dir,
@@ -388,40 +514,277 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             return opts
 
         def _on_glue(self, _btn):
+            # With the chip-based UI, each exclude is an individual pattern, so
+            # the legacy "spaces without commas" ambiguity can no longer arise.
+            # If there is uncommitted text in the manual entry, commit it as a
+            # chip first so the user sees what will be sent.
+            if self.manual_exclude_entry is not None:
+                pending = self.manual_exclude_entry.get_text().strip()
+                if pending:
+                    self._add_exclude_chip(pending)
+                    self.manual_exclude_entry.set_text("")
             opts = self._collect_opts()
-
-            # Exclude validation: space without comma
-            excludes = opts["excludes"].strip()
-            if excludes and " " in excludes and "," not in excludes:
-                # Gtk.AlertDialog requires GTK 4.10+
-                gtk_version = (Gtk.get_major_version(), Gtk.get_minor_version())
-                if gtk_version >= (4, 10):
-                    dialog = Gtk.AlertDialog()
-                    dialog.set_message("Exclude patterns contain spaces but no commas")
-                    dialog.set_detail(
-                        f'You entered: "{excludes}"\n\n'
-                        "Patterns are comma-separated. Replace spaces with commas?"
-                    )
-                    dialog.set_buttons(["Cancel", "Keep as-is", "Fix it"])
-                    dialog.choose(self, None, self._on_exclude_dialog_response, opts)
-                else:
-                    # Fallback for older GTK: auto-fix without asking
-                    opts["excludes"] = excludes.replace(" ", ",")
-                    self._execute(opts)
-                return
-
             self._execute(opts)
 
-        def _on_exclude_dialog_response(self, dialog, result, opts):
+        # ── Exclude chips ────────────────────────────────────────────────
+
+        def _add_exclude_chip(self, text: str) -> None:
+            """Add a removable chip for an exclude pattern. Duplicates are silently skipped."""
+            text = (text or "").strip()
+            print(f"[CodeGluer] _add_exclude_chip({text!r})", file=sys.stderr)
+            if not text:
+                print("[CodeGluer]   skipped: empty", file=sys.stderr)
+                return
+            if text in self.excludes:
+                print("[CodeGluer]   skipped: duplicate", file=sys.stderr)
+                return
             try:
-                choice = dialog.choose_finish(result)
+                self.excludes.append(text)
+
+                chip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+                chip.add_css_class("chip")
+                chip.set_halign(Gtk.Align.START)
+                chip.set_valign(Gtk.Align.CENTER)
+
+                label = Gtk.Label(label=text)
+                label.set_max_width_chars(30)
+                # FIX (2026-07-04): must be Pango.EllipsizeMode, NOT
+                # Gtk.EllipsizeMode — Gtk has no such attribute. If this
+                # regresses back to `Gtk.EllipsizeMode.END`, every chip-add
+                # raises AttributeError (caught below and shown as
+                # "Failed to add exclude chip"). See Pango import above.
+                label.set_ellipsize(Pango.EllipsizeMode.END)
+                label.set_tooltip_text(text)
+                chip.append(label)
+
+                close_btn = Gtk.Button(label="✕")
+                close_btn.add_css_class("chip-close")
+                close_btn.set_tooltip_text(f"Remove {text}")
+                close_btn.connect("clicked", lambda *_: self._remove_exclude_chip(text, chip))
+                chip.append(close_btn)
+
+                self.chip_flowbox.insert(chip, -1)
+                # Force the FlowBox visible (it starts hidden). Don't toggle it
+                # back off when the last chip is removed — that reflow path has
+                # caused chips to silently not appear after the first add.
+                self.chip_flowbox.set_visible(True)
+                print(f"[CodeGluer]   added. total excludes now: {len(self.excludes)}", file=sys.stderr)
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc(), file=sys.stderr)
+                self._show_error_dialog("Failed to add exclude chip", str(e))
+
+        def _remove_exclude_chip(self, text: str, chip_widget) -> None:
+            """Remove a chip widget and its pattern from the excludes list."""
+            if text in self.excludes:
+                self.excludes.remove(text)
+            # FlowBox wraps each child in a GtkFlowBoxChild; remove via that wrapper.
+            parent = chip_widget.get_parent()
+            try:
+                self.chip_flowbox.remove(parent)
             except Exception:
+                # Fallback: try removing the chip directly
+                try:
+                    self.chip_flowbox.remove(chip_widget)
+                except Exception:
+                    pass
+            if not self.excludes:
+                self.chip_flowbox.set_visible(False)
+
+        def _on_manual_exclude_activate(self, entry) -> None:
+            """Enter in the manual entry adds the typed text as a chip."""
+            text = entry.get_text().strip()
+            if text:
+                self._add_exclude_chip(text)
+                entry.set_text("")
+
+        # ── Browse button → file picker ──────────────────────────────────
+
+        def _on_browse_clicked(self, _btn) -> None:
+            """Open a multi-select file picker. Prefers FileDialog (GTK 4.10+
+            AND exposed in the PyGObject bindings), falls back to
+            FileChooserNative on older stacks. Any exception surfaces to the
+            user as a visible error dialog — otherwise GTK swallows it
+            silently and the button just looks dead."""
+            gtk_version = (Gtk.get_major_version(), Gtk.get_minor_version())
+            print(f"[CodeGluer] Browse clicked. GTK={gtk_version[0]}.{gtk_version[1]}, "
+                  f"has FileDialog={hasattr(Gtk, 'FileDialog')}", file=sys.stderr)
+            try:
+                if self._try_open_file_dialog():
+                    return
+                self._open_file_chooser_dialog()
+            except Exception as e:
+                # Surface the error so the user (and we) can see what failed
+                # instead of the button doing nothing visible.
+                import traceback
+                tb = traceback.format_exc()
+                print(tb, file=sys.stderr)
+                self._show_error_dialog(
+                    "Could not open file picker",
+                    f"{type(e).__name__}: {e}",
+                )
+
+        def _show_error_dialog(self, message: str, detail: str = "") -> None:
+            """Best-effort error dialog. Uses AlertDialog on GTK 4.10+,
+            MessageDialog fallback otherwise."""
+            gtk_version = (Gtk.get_major_version(), Gtk.get_minor_version())
+            if gtk_version >= (4, 10):
+                d = Gtk.AlertDialog()
+                d.set_message(message)
+                d.set_detail(detail) if detail else None
+                d.set_buttons(["OK"])
+                d.show(self)
+            else:
+                # Synchronous fallback for older GTK
+                d = Gtk.MessageDialog(
+                    transient_for=self,
+                    modal=True,
+                    message_type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK,
+                    text=message,
+                )
+                if detail:
+                    d.set_secondary_text(detail)
+                d.connect("response", lambda *_: d.destroy())
+                d.present()
+
+        def _try_open_file_dialog(self) -> bool:
+            """Attempt the GTK 4.10+ FileDialog path. Returns True if used,
+            False if not available in this PyGObject binding (so caller can
+            fall back to FileChooserNative)."""
+            gtk_version = (Gtk.get_major_version(), Gtk.get_minor_version())
+            if gtk_version < (4, 10):
+                return False
+            if not hasattr(Gtk, "FileDialog"):
+                # GTK 4.10+ runtime but PyGObject too old to expose the class
+                return False
+            self._open_file_dialog()
+            return True
+
+        def _open_file_dialog(self) -> None:
+            """GTK 4.10+ path: async Gtk.FileDialog with multi-select."""
+            dialog = Gtk.FileDialog()
+            dialog.set_title("Select files to exclude")
+            dialog.set_modal(True)
+            try:
+                # FIX (2026-07-04): guarded with _looks_heavy() — see comment
+                # at its definition. Do not go back to an unconditional
+                # `if self.target_dir and os.path.isdir(self.target_dir):`.
+                if (self.target_dir and os.path.isdir(self.target_dir)
+                        and not _looks_heavy(self.target_dir)):
+                    dialog.set_initial_folder(Gio.File.new_for_path(self.target_dir))
+            except Exception:
+                pass
+            # Keep a reference — Python GC can destroy the dialog mid-flight
+            # if it goes out of scope, which would silently cancel it.
+            self._active_picker = dialog
+            dialog.open_multiple(self, None, self._on_file_dialog_response)
+
+        def _on_file_dialog_response(self, dialog, result) -> None:
+            print("[CodeGluer] FileDialog response callback fired", file=sys.stderr)
+            self._active_picker = None
+            try:
+                files = dialog.open_multiple_finish(result)
+            except Exception as e:
+                # Cancellation comes through as a GLib.Error; any other
+                # exception here is a real bug we want to see.
+                print(f"[CodeGluer] open_multiple_finish raised: "
+                      f"{type(e).__module__}.{type(e).__name__}: {e}",
+                      file=sys.stderr)
                 return
-            if choice == 2:  # Fix it
-                opts["excludes"] = opts["excludes"].replace(" ", ",")
-            elif choice == 0:  # Cancel
+            print(f"[CodeGluer] open_multiple_finish returned: {files!r}", file=sys.stderr)
+            if files is None:
+                print("[CodeGluer] files is None — bailing", file=sys.stderr)
                 return
-            self._execute(opts)
+            try:
+                n = files.get_n_items()
+                print(f"[CodeGluer] number of items selected: {n}", file=sys.stderr)
+            except Exception as e:
+                print(f"[CodeGluer] get_n_items() failed: {e}", file=sys.stderr)
+                return
+            if n == 0:
+                print("[CodeGluer] no items selected — bailing", file=sys.stderr)
+                return
+            try:
+                for i in range(n):
+                    gfile = files.get_item(i)
+                    if gfile is None:
+                        print(f"[CodeGluer]   item {i} is None", file=sys.stderr)
+                        continue
+                    name = gfile.get_basename()
+                    print(f"[CodeGluer]   item {i}: {name!r}", file=sys.stderr)
+                    if name:
+                        self._add_exclude_chip(name)
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc(), file=sys.stderr)
+                self._show_error_dialog("Failed to process selected files", str(e))
+
+        def _open_file_chooser_dialog(self) -> None:
+            """Pre-GTK 4.10 path (or FileDialog unavailable): FileChooserNative
+            with multi-select. NOTE: FileChooserNative is a Gtk.NativeDialog —
+            you must call .show(), NOT .present() (that was the bug)."""
+            dialog = Gtk.FileChooserNative.new(
+                title="Select files to exclude",
+                parent=self,
+                action=Gtk.FileChooserAction.OPEN,
+                accept_label="_Select",
+                cancel_label="_Cancel",
+            )
+            dialog.set_select_multiple(True)
+            try:
+                # FIX (2026-07-04): same guard as the FileDialog path above —
+                # do not remove the _looks_heavy() check.
+                if (self.target_dir and os.path.isdir(self.target_dir)
+                        and not _looks_heavy(self.target_dir)):
+                    dialog.set_current_folder(Gio.File.new_for_path(self.target_dir))
+            except Exception:
+                pass
+            dialog.connect("response", self._on_file_chooser_response)
+            # Keep a reference to prevent GC during async interaction.
+            self._active_picker = dialog
+            # NativeDialog uses .show(), not .present() — calling present()
+            # silently no-ops and the dialog never appears.
+            dialog.show()
+
+        def _on_file_chooser_response(self, dialog, response) -> None:
+            print(f"[CodeGluer] FileChooserNative response: {response}", file=sys.stderr)
+            self._active_picker = None
+            # ACCEPT (-3) and OK (-5) both mean "user picked something".
+            # Some desktops/themes return OK instead of ACCEPT.
+            accepted = response in (
+                Gtk.ResponseType.ACCEPT,
+                Gtk.ResponseType.OK,
+            )
+            print(f"[CodeGluer] accepted={accepted}", file=sys.stderr)
+            if accepted:
+                try:
+                    files = dialog.get_files()
+                    print(f"[CodeGluer] get_files() returned: {files!r}", file=sys.stderr)
+                except Exception as e:
+                    print(f"[CodeGluer] get_files() raised: {e}", file=sys.stderr)
+                    files = None
+                if files is None:
+                    print("[CodeGluer] files is None — bailing", file=sys.stderr)
+                else:
+                    try:
+                        n = files.get_n_items()
+                        print(f"[CodeGluer] number of items selected: {n}", file=sys.stderr)
+                        for i in range(n):
+                            gfile = files.get_item(i)
+                            if gfile is None:
+                                continue
+                            name = gfile.get_basename()
+                            print(f"[CodeGluer]   item {i}: {name!r}", file=sys.stderr)
+                            if name:
+                                self._add_exclude_chip(name)
+                    except Exception as e:
+                        import traceback
+                        print(traceback.format_exc(), file=sys.stderr)
+                        self._show_error_dialog("Failed to process selected files", str(e))
+            else:
+                print(f"[CodeGluer] user did not accept (response={response})", file=sys.stderr)
+            dialog.destroy()
 
         def _execute(self, opts):
             # Use absolute path for codegluer (fallback to ~/.local/bin)
