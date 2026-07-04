@@ -14,6 +14,30 @@ SEPARATOR_CHAR = "="
 SEPARATOR_LENGTH = 70
 STDOUT_SENTINEL = "-"
 
+# FIX (2026-07-04): OOM/system-freeze bug — recursive glue (-r) with no
+# --exclude on a folder containing node_modules/.next/etc. read tens of
+# thousands of files into memory with no ceiling, causing swap-thrashing bad
+# enough to require a hard restart (confirmed: no clean OOM-kill in
+# journalctl, i.e. it thrashed to death before the kernel could intervene).
+# DEFAULT_IGNORE_DIR_NAMES + DEFAULT_MAX_TOTAL_BYTES are the guards against
+# this. Do not delete them or make GlueConfig's skip_default_ignore_dirs /
+# max_total_bytes default to disabled — that silently reintroduces the freeze
+# for any recursive glue of a real JS/build-heavy project.
+#
+# ponytail: fixed list, not user-configurable beyond on/off. If someone needs
+# to glue *inside* node_modules etc. on purpose, --no-default-ignore disables
+# this entirely rather than trying to support per-name overrides.
+DEFAULT_IGNORE_DIR_NAMES = {
+    "node_modules", ".git", ".next", ".nuxt", "dist", "build",
+    "__pycache__", ".venv", "venv", "target", ".cache", ".pytest_cache",
+    "vendor", ".turbo",
+}
+
+# Hard ceiling on total glued content size, in bytes. Prevents a forgotten
+# --exclude on a folder like node_modules from reading gigabytes into memory
+# and thrashing the system to a freeze. 0 or None disables the check.
+DEFAULT_MAX_TOTAL_BYTES = 20 * 1024 * 1024  # 20 MB
+
 EXT_TO_LANG = {
     ".py": "python", ".js": "javascript", ".ts": "typescript", ".jsx": "jsx", ".tsx": "tsx",
     ".html": "html", ".css": "css", ".scss": "scss", ".json": "json", ".yaml": "yaml",
@@ -68,6 +92,11 @@ class GlueConfig:
     ai_prompt: str | None = None
     ai_prompt_file: str | None = None   # Path to a file containing the prompt text
     priority_patterns: list = field(default_factory=list)
+    # FIX (2026-07-04): do not change these defaults to False/None — see the
+    # OOM/freeze comment above DEFAULT_IGNORE_DIR_NAMES for why they exist.
+    # ── Safety guards ────────────────────────────────────────────────────
+    skip_default_ignore_dirs: bool = True   # skip node_modules/.git/etc during -r walk
+    max_total_bytes: int | None = DEFAULT_MAX_TOTAL_BYTES  # None/0 = no cap
 
 # ─────────────────────────────────────────────────────────────────────
 # Header / Footer / Markdown builders
@@ -297,6 +326,9 @@ def collect_files(
     respect_gitignore=False,
     exclude_patterns=None,
     include_patterns=None,
+    # FIX (2026-07-04): do not remove this param or default it to False.
+    # See DEFAULT_IGNORE_DIR_NAMES comment above for the freeze it prevents.
+    skip_default_ignore_dirs=True,
 ):
     """
     Collect files from the given paths, applying filtering and .gitignore rules.
@@ -366,6 +398,13 @@ def collect_files(
                 # Filter directories: exclude patterns and gitignore
                 filtered_dirs = []
                 for d in dirs:
+                    # FIX (2026-07-04): skip node_modules/.git/etc BEFORE any
+                    # pattern matching or descending into them — this must run
+                    # even when the user passed no --exclude at all. Removing
+                    # this check reopens the OOM/freeze bug (see top of file).
+                    if skip_default_ignore_dirs and d in DEFAULT_IGNORE_DIR_NAMES:
+                        continue
+
                     dir_abs = root_path / d
                     try:
                         rel_to_base = str(dir_abs.relative_to(base_dir)).replace("\\", "/")
@@ -415,12 +454,16 @@ def glue_files(paths, config: GlueConfig | None = None) -> tuple[str, int]:
         raise NoFilesError("No paths provided.")
 
     # collect_files resolves everything once and returns resolved Path objects
+    # FIX (2026-07-04): must pass config.skip_default_ignore_dirs through —
+    # without it collect_files() falls back to its own default and GlueConfig
+    # can no longer turn the guard off via --no-default-ignore.
     file_paths = collect_files(
         paths,
         recursive=config.recursive,
         respect_gitignore=config.respect_gitignore,
         exclude_patterns=config.exclude_patterns,
         include_patterns=config.include_patterns,
+        skip_default_ignore_dirs=config.skip_default_ignore_dirs,
     )
 
     if not file_paths:
@@ -466,6 +509,13 @@ def glue_files(paths, config: GlueConfig | None = None) -> tuple[str, int]:
     # Track files that were actually read and added to sections
     successful_paths = []
 
+    # FIX (2026-07-04): total_bytes/max_total_bytes enforce the hard ceiling
+    # from DEFAULT_MAX_TOTAL_BYTES (see comment near that constant). Removing
+    # this tracking removes the only thing stopping an unbounded in-memory
+    # string on a forgotten --exclude.
+    total_bytes = 0
+    max_total_bytes = config.max_total_bytes or None
+
     for filepath in file_paths:
         if not filepath.is_file():
             logger.warning(f"Skipping '{filepath}' (not a regular file).")
@@ -491,6 +541,21 @@ def glue_files(paths, config: GlueConfig | None = None) -> tuple[str, int]:
         except Exception as e:
             logger.warning(f"Could not read '{filepath}': {e}")
             continue
+
+        if max_total_bytes is not None:
+            # FIX (2026-07-04): abort BEFORE this file's content is appended
+            # to `sections` — checking after the fact means the memory is
+            # already spent. This is the actual OOM guard; do not move this
+            # check later in the loop or make it non-fatal.
+            total_bytes += len(content.encode("utf-8", errors="replace"))
+            if total_bytes > max_total_bytes:
+                raise CodeGluerError(
+                    f"Aborting: glued content exceeded {max_total_bytes / (1024 * 1024):.0f}MB "
+                    f"after reading {success_count + 1} file(s) (stopped at '{filepath}'). "
+                    "This usually means a large dependency/build folder (node_modules, .next, "
+                    "dist, venv, etc.) is being included. Use --exclude or --respect-gitignore "
+                    "to cut it down, or raise the limit with --max-size <MB> (0 disables it)."
+                )
 
         # --- stats (zero overhead when disabled) ---
         if stats:

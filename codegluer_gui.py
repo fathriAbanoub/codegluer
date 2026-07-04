@@ -22,8 +22,56 @@ import subprocess
 import shutil
 from pathlib import Path
 
+# ----------------------------------------------------------------------
+# Debug flag – set CODEGLUER_DEBUG=1 to see verbose prints
+# ----------------------------------------------------------------------
+DEBUG = os.getenv("CODEGLUER_DEBUG", "").lower() in ("1", "true", "yes")
+
+def debug_print(*args, **kwargs):
+    if DEBUG:
+        print(*args, file=sys.stderr, **kwargs)
+
+
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))) / "codegluer"
 CONFIG_FILE = CONFIG_DIR / "theme"
+
+# FIX (2026-07-04): freeze bug — opening the Browse file picker with its
+# initial folder pointed at a directory containing node_modules/.next/etc.
+# made the native GTK/portal file dialog try to enumerate and thumbnail
+# everything in it, hanging so badly a full system restart was required
+# (confirmed via journalctl — no clean OOM-kill, i.e. swap-thrash-to-freeze,
+# not a normal crash). _looks_heavy() below is the guard against this.
+# Do not remove it or re-add an unconditional set_initial_folder/
+# set_current_folder call using self.target_dir.
+#
+# Mirrors codegluer.core.DEFAULT_IGNORE_DIR_NAMES, duplicated (not imported) so
+# this script keeps working standalone in ~/.local/bin without the package
+# import path. Used only to avoid pointing a file dialog's initial folder at
+# something that will make it hang while enumerating/thumbnailing.
+_HEAVY_DIR_HINTS = {
+    "node_modules", ".git", ".next", ".nuxt", "dist", "build",
+    "__pycache__", ".venv", "venv", "target", ".cache", "vendor",
+}
+
+
+def _looks_heavy(path: str, scan_limit: int = 500) -> bool:
+    """Cheap heuristic, not a full walk: does this directory contain a known
+    dependency/build folder, or an unusually large number of direct entries?
+    Opening a native file picker's initial folder inside something like
+    node_modules is a known way to freeze GTK file choosers while they
+    enumerate and thumbnail everything — this just avoids that trigger."""
+    try:
+        with os.scandir(path) as it:
+            count = 0
+            for entry in it:
+                count += 1
+                if entry.name in _HEAVY_DIR_HINTS and entry.is_dir():
+                    return True
+                if count > scan_limit:
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -138,6 +186,33 @@ def save_theme(theme: str) -> None:
     CONFIG_FILE.write_text(theme)
 
 
+# ─── CSS ─────────────────────────────────────────────────────────────
+# Structural styles (no colors) – colors defined per theme below.
+CHIP_CSS_BASE = """
+    .chip {
+        border-radius: 11px;
+        padding: 2px 4px 2px 10px;
+    }
+    .chip-close {
+        background: transparent;
+        border-radius: 50%;
+        min-width: 18px;
+        min-height: 18px;
+        padding: 0;
+        margin: 0;
+        box-shadow: none;
+        outline: none;
+    }
+    .chip-close:hover { background: rgba(255, 255, 255, 0.25); }
+    .chip-close:active { background: rgba(255, 255, 255, 0.4); }
+    flowboxchild {
+        outline: none;
+        background: transparent;
+        padding: 0;
+        border-radius: 11px;
+    }
+"""
+
 THEME_CSS = {
     "light": """
         window { background: #ffffff; color: #333333; }
@@ -146,6 +221,10 @@ THEME_CSS = {
         dropdown { background: #f9f9f9; border: 1px solid #ddd; border-radius: 3px; }
         button.suggested-action { background: #C62734; color: white; border-radius: 4px; }
         button { padding: 6px 12px; border-radius: 4px; }
+        .chip-box { background: #f9f9f9; border: 1px solid #ddd; border-radius: 3px; padding: 6px; }
+        .chip { background: #1e3a5f; }
+        .chip label { color: #ffffff; }
+        .chip-close { color: #ffffff; }
     """,
     "dark": """
         window { background: #2b2b2b; color: #e0e0e0; }
@@ -154,6 +233,10 @@ THEME_CSS = {
         dropdown { background: #3a3a3a; border: 1px solid #555; border-radius: 3px; }
         button.suggested-action { background: #E87672; color: #1a1a1a; border-radius: 4px; }
         button { padding: 6px 12px; border-radius: 4px; }
+        .chip-box { background: #3a3a3a; border: 1px solid #555; border-radius: 3px; padding: 6px; }
+        .chip { background: #4a6fa5; }
+        .chip label { color: #ffffff; }
+        .chip-close { color: #ffffff; }
     """,
     "roselle": """
         window { background: #1a0a0a; color: #f0d0d0; }
@@ -162,6 +245,10 @@ THEME_CSS = {
         dropdown { background: #2a1515; border: 1px solid #C62734; border-radius: 3px; }
         button.suggested-action { background: #C62734; color: #fff0f0; border-radius: 4px; }
         button { padding: 6px 12px; border-radius: 4px; }
+        .chip-box { background: #2a1515; border: 1px solid #C62734; border-radius: 3px; padding: 6px; }
+        .chip { background: #C62734; }
+        .chip label { color: #fff0f0; }
+        .chip-close { color: #fff0f0; }
     """,
 }
 
@@ -182,7 +269,7 @@ def resolve_theme(theme: str) -> str:
 
 def theme_css(theme: str) -> str:
     resolved = resolve_theme(theme)
-    return THEME_CSS.get(resolved, "")
+    return CHIP_CSS_BASE + THEME_CSS.get(resolved, "")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -193,7 +280,7 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
     """Launch the GTK4 dialog. Returns the built command via dry_run or executes it."""
     import gi
     gi.require_version("Gtk", "4.0")
-    from gi.repository import Gtk, Gio, GLib, Gdk
+    from gi.repository import Gtk, Gio, GLib, Gdk, Pango
 
     any_dir = is_any_dir(files)
     target_dir = target_dir_of(files)
@@ -213,12 +300,15 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             self.format = "markdown"
             self.output_entry = None
             self.excludes_entry = None
+            self.manual_exclude_entry = None
+            self.chip_flowbox = None
+            self.excludes: list[str] = []
             self.format_dropdown = None
             self.theme_dropdown = None
             self.checkboxes = {}
 
-            # Reusable CSS provider (fix leak)
             self._css_provider = None
+            self._active_picker = None
 
             self._build_ui()
             self._apply_theme(self.current_theme)
@@ -227,7 +317,6 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
             self.set_child(main_box)
 
-            # Header bar with buttons
             header = Gtk.HeaderBar()
             self.set_titlebar(header)
 
@@ -242,10 +331,9 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
 
             self.apply_theme_btn = Gtk.Button(label="Apply Theme")
             self.apply_theme_btn.connect("clicked", self._on_apply_theme)
-            self.apply_theme_btn.set_sensitive(False)  # grayed until user picks a theme
+            self.apply_theme_btn.set_sensitive(False)
             header.pack_end(self.apply_theme_btn)
 
-            # Content area with margin
             content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
             content.set_margin_start(16)
             content.set_margin_end(16)
@@ -253,13 +341,11 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             content.set_margin_bottom(16)
             main_box.append(content)
 
-            # Info label
             info = Gtk.Label(label=f"Glue {len(self.files)} item(s)  →  {self.target_dir}")
             info.set_halign(Gtk.Align.START)
             info.set_use_markup(True)
             content.append(info)
 
-            # Grid for form fields
             grid = Gtk.Grid()
             grid.set_row_spacing(8)
             grid.set_column_spacing(12)
@@ -279,11 +365,41 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             row += 1
 
             # Exclude patterns
-            grid.attach(Gtk.Label(label="Exclude (comma-separated):", halign=Gtk.Align.END), 0, row, 1, 1)
-            self.excludes_entry = Gtk.Entry()
-            self.excludes_entry.set_placeholder_text("e.g., *.pyc, __pycache__, .git")
-            self.excludes_entry.set_hexpand(True)
-            grid.attach(self.excludes_entry, 1, row, 1, 1)
+            grid.attach(Gtk.Label(label="Exclude:", halign=Gtk.Align.END, valign=Gtk.Align.START), 0, row, 1, 1)
+
+            exclude_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            exclude_row.set_hexpand(True)
+            exclude_row.set_valign(Gtk.Align.START)
+
+            exclude_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            exclude_box.add_css_class("chip-box")
+            exclude_box.set_hexpand(True)
+            exclude_row.append(exclude_box)
+
+            self.chip_flowbox = Gtk.FlowBox()
+            self.chip_flowbox.set_selection_mode(Gtk.SelectionMode.NONE)
+            self.chip_flowbox.set_max_children_per_line(20)
+            self.chip_flowbox.set_min_children_per_line(1)
+            self.chip_flowbox.set_column_spacing(4)
+            self.chip_flowbox.set_row_spacing(4)
+            self.chip_flowbox.set_visible(False)
+            exclude_box.append(self.chip_flowbox)
+
+            self.manual_exclude_entry = Gtk.Entry()
+            self.manual_exclude_entry.set_placeholder_text(
+                "Type a pattern and press Enter, or click Browse…"
+            )
+            self.manual_exclude_entry.set_hexpand(True)
+            self.manual_exclude_entry.connect("activate", self._on_manual_exclude_activate)
+            exclude_box.append(self.manual_exclude_entry)
+
+            browse_btn = Gtk.Button(label="Browse…")
+            browse_btn.set_tooltip_text("Select files to exclude")
+            browse_btn.set_valign(Gtk.Align.CENTER)
+            browse_btn.connect("clicked", self._on_browse_clicked)
+            exclude_row.append(browse_btn)
+
+            grid.attach(exclude_row, 1, row, 1, 1)
             row += 1
 
             # Format dropdown
@@ -294,22 +410,18 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             grid.attach(self.format_dropdown, 1, row, 1, 1)
             row += 1
 
-            # Theme dropdown shows "auto" (grays Apply) + real themes (enable Apply).
-            # Initial selection is the saved theme (or "auto" if none saved).
+            # Theme dropdown
             grid.attach(Gtk.Label(label="Theme:", halign=Gtk.Align.END), 0, row, 1, 1)
             theme_model = Gtk.StringList.new(THEMES)
             self.theme_dropdown = Gtk.DropDown(model=theme_model)
-            # Show saved theme (auto if none saved); Apply grayed if auto
             self.theme_dropdown.set_selected(THEMES.index(self.current_theme))
             self.theme_dropdown.connect("notify::selected", self._on_theme_dropdown_changed)
             grid.attach(self.theme_dropdown, 1, row, 1, 1)
             row += 1
 
-            # Separator
             sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
             content.append(sep)
 
-            # Checkboxes
             checks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             content.append(checks_box)
 
@@ -339,12 +451,10 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
                 self.output_entry.set_text(
                     default_name(self.target_dir, self.format)
                 )
-            # TOC is markdown-only → clear checkbox when switching to plain
             if self.format == "plain" and "toc" in self.checkboxes:
                 self.checkboxes["toc"].set_active(False)
 
         def _on_theme_dropdown_changed(self, dropdown, _param):
-            # Only real themes (light/dark/roselle) enable Apply. "auto" grays it.
             selected = THEMES[dropdown.get_selected()]
             self.apply_theme_btn.set_sensitive(selected in REAL_THEMES)
 
@@ -354,7 +464,7 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             self.current_theme = new_theme
             save_theme(new_theme)
             self._apply_theme(new_theme)
-            self.apply_theme_btn.set_sensitive(False)  # applied → gray out again
+            self.apply_theme_btn.set_sensitive(False)
 
         def _apply_theme(self, theme):
             css_text = theme_css(theme)
@@ -372,10 +482,15 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             )
 
         def _collect_opts(self):
+            excludes_list = list(self.excludes)
+            if self.manual_exclude_entry is not None:
+                pending = self.manual_exclude_entry.get_text().strip()
+                if pending and pending not in excludes_list:
+                    excludes_list.append(pending)
             opts = {
                 "format": self.format,
                 "output": self.output_entry.get_text(),
-                "excludes": self.excludes_entry.get_text(),
+                "excludes": ", ".join(excludes_list),
                 "stats": self.checkboxes["stats"].get_active(),
                 "estimate_tokens": self.checkboxes["estimate_tokens"].get_active(),
                 "any_dir": self.any_dir,
@@ -388,45 +503,241 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             return opts
 
         def _on_glue(self, _btn):
+            if self.manual_exclude_entry is not None:
+                pending = self.manual_exclude_entry.get_text().strip()
+                if pending:
+                    self._add_exclude_chip(pending)
+                    self.manual_exclude_entry.set_text("")
             opts = self._collect_opts()
-
-            # Exclude validation: space without comma
-            excludes = opts["excludes"].strip()
-            if excludes and " " in excludes and "," not in excludes:
-                # Gtk.AlertDialog requires GTK 4.10+
-                gtk_version = (Gtk.get_major_version(), Gtk.get_minor_version())
-                if gtk_version >= (4, 10):
-                    dialog = Gtk.AlertDialog()
-                    dialog.set_message("Exclude patterns contain spaces but no commas")
-                    dialog.set_detail(
-                        f'You entered: "{excludes}"\n\n'
-                        "Patterns are comma-separated. Replace spaces with commas?"
-                    )
-                    dialog.set_buttons(["Cancel", "Keep as-is", "Fix it"])
-                    dialog.choose(self, None, self._on_exclude_dialog_response, opts)
-                else:
-                    # Fallback for older GTK: auto-fix without asking
-                    opts["excludes"] = excludes.replace(" ", ",")
-                    self._execute(opts)
-                return
-
             self._execute(opts)
 
-        def _on_exclude_dialog_response(self, dialog, result, opts):
+        # ── Exclude chips ────────────────────────────────────────────────
+
+        def _normalize_exclude_pattern(self, text: str) -> str:
+            text = text.strip()
+            if text.startswith('./'):
+                text = text[2:]
+            if text.endswith('/'):
+                text = text[:-1]
+            return text
+
+        def _add_exclude_chip(self, text: str) -> None:
+            normalized = self._normalize_exclude_pattern(text)
+            debug_print(f"[CodeGluer] _add_exclude_chip({text!r}) -> normalized {normalized!r}")
+            if not normalized:
+                debug_print("[CodeGluer]   skipped: empty after normalization")
+                return
+            if normalized in self.excludes:
+                debug_print("[CodeGluer]   skipped: duplicate")
+                return
             try:
-                choice = dialog.choose_finish(result)
+                self.excludes.append(normalized)
+
+                chip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+                chip.add_css_class("chip")
+                chip.set_halign(Gtk.Align.START)
+                chip.set_valign(Gtk.Align.CENTER)
+
+                label = Gtk.Label(label=normalized)
+                label.set_max_width_chars(30)
+                label.set_ellipsize(Pango.EllipsizeMode.END)
+                label.set_tooltip_text(normalized)
+                chip.append(label)
+
+                close_btn = Gtk.Button(label="✕")
+                close_btn.add_css_class("chip-close")
+                close_btn.set_tooltip_text(f"Remove {normalized}")
+                close_btn.connect("clicked", lambda *_: self._remove_exclude_chip(normalized, chip))
+                chip.append(close_btn)
+
+                self.chip_flowbox.insert(chip, -1)
+                self.chip_flowbox.set_visible(True)
+                debug_print(f"[CodeGluer]   added. total excludes now: {len(self.excludes)}")
+            except Exception as e:
+                import traceback
+                debug_print(traceback.format_exc())
+                self._show_error_dialog("Failed to add exclude chip", str(e))
+
+        def _remove_exclude_chip(self, text: str, chip_widget) -> None:
+            """Remove a chip widget and its pattern from the excludes list."""
+            if text in self.excludes:
+                self.excludes.remove(text)
+            parent = chip_widget.get_parent()
+            try:
+                self.chip_flowbox.remove(parent)
             except Exception:
+                try:
+                    self.chip_flowbox.remove(chip_widget)
+                except Exception:
+                    pass
+            # FIX (2026-07-04): Do NOT hide the flowbox when empty.
+            # The reflow path has caused chips to silently not appear after
+            # the first add (see comment in _add_exclude_chip). Keeping the
+            # flowbox visible even when empty avoids that weird state.
+            # if not self.excludes: self.chip_flowbox.set_visible(False)
+
+        def _on_manual_exclude_activate(self, entry) -> None:
+            text = entry.get_text().strip()
+            if text:
+                self._add_exclude_chip(text)
+                entry.set_text("")
+
+        # ── Browse button ──────────────────────────────────────────────────
+
+        def _on_browse_clicked(self, _btn) -> None:
+            gtk_version = (Gtk.get_major_version(), Gtk.get_minor_version())
+            debug_print(f"[CodeGluer] Browse clicked. GTK={gtk_version[0]}.{gtk_version[1]}, "
+                        f"has FileDialog={hasattr(Gtk, 'FileDialog')}")
+            try:
+                if self._try_open_file_dialog():
+                    return
+                self._open_file_chooser_dialog()
+            except Exception as e:
+                import traceback
+                debug_print(traceback.format_exc())
+                self._show_error_dialog(
+                    "Could not open file picker",
+                    f"{type(e).__name__}: {e}",
+                )
+
+        def _show_error_dialog(self, message: str, detail: str = "") -> None:
+            gtk_version = (Gtk.get_major_version(), Gtk.get_minor_version())
+            if gtk_version >= (4, 10):
+                d = Gtk.AlertDialog()
+                d.set_message(message)
+                d.set_detail(detail) if detail else None
+                d.set_buttons(["OK"])
+                d.show(self)
+            else:
+                d = Gtk.MessageDialog(
+                    transient_for=self,
+                    modal=True,
+                    message_type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK,
+                    text=message,
+                )
+                if detail:
+                    d.set_secondary_text(detail)
+                d.connect("response", lambda *_: d.destroy())
+                d.present()
+
+        def _try_open_file_dialog(self) -> bool:
+            gtk_version = (Gtk.get_major_version(), Gtk.get_minor_version())
+            if gtk_version < (4, 10):
+                return False
+            if not hasattr(Gtk, "FileDialog"):
+                return False
+            self._open_file_dialog()
+            return True
+
+        def _open_file_dialog(self) -> None:
+            dialog = Gtk.FileDialog()
+            dialog.set_title("Select files to exclude")
+            dialog.set_modal(True)
+            try:
+                if (self.target_dir and os.path.isdir(self.target_dir)
+                        and not _looks_heavy(self.target_dir)):
+                    dialog.set_initial_folder(Gio.File.new_for_path(self.target_dir))
+            except Exception:
+                pass
+            self._active_picker = dialog
+            dialog.open_multiple(self, None, self._on_file_dialog_response)
+
+        def _on_file_dialog_response(self, dialog, result) -> None:
+            debug_print("[CodeGluer] FileDialog response callback fired")
+            self._active_picker = None
+            try:
+                files = dialog.open_multiple_finish(result)
+            except Exception as e:
+                debug_print(f"[CodeGluer] open_multiple_finish raised: "
+                            f"{type(e).__module__}.{type(e).__name__}: {e}")
                 return
-            if choice == 2:  # Fix it
-                opts["excludes"] = opts["excludes"].replace(" ", ",")
-            elif choice == 0:  # Cancel
+            debug_print(f"[CodeGluer] open_multiple_finish returned: {files!r}")
+            if files is None:
+                debug_print("[CodeGluer] files is None — bailing")
                 return
-            self._execute(opts)
+            try:
+                n = files.get_n_items()
+                debug_print(f"[CodeGluer] number of items selected: {n}")
+            except Exception as e:
+                debug_print(f"[CodeGluer] get_n_items() failed: {e}")
+                return
+            if n == 0:
+                debug_print("[CodeGluer] no items selected — bailing")
+                return
+            try:
+                for i in range(n):
+                    gfile = files.get_item(i)
+                    if gfile is None:
+                        debug_print(f"[CodeGluer]   item {i} is None")
+                        continue
+                    name = gfile.get_basename()
+                    debug_print(f"[CodeGluer]   item {i}: {name!r}")
+                    if name:
+                        self._add_exclude_chip(name)
+            except Exception as e:
+                import traceback
+                debug_print(traceback.format_exc())
+                self._show_error_dialog("Failed to process selected files", str(e))
+
+        def _open_file_chooser_dialog(self) -> None:
+            dialog = Gtk.FileChooserNative.new(
+                title="Select files to exclude",
+                parent=self,
+                action=Gtk.FileChooserAction.OPEN,
+                accept_label="_Select",
+                cancel_label="_Cancel",
+            )
+            dialog.set_select_multiple(True)
+            try:
+                if (self.target_dir and os.path.isdir(self.target_dir)
+                        and not _looks_heavy(self.target_dir)):
+                    dialog.set_current_folder(Gio.File.new_for_path(self.target_dir))
+            except Exception:
+                pass
+            dialog.connect("response", self._on_file_chooser_response)
+            self._active_picker = dialog
+            dialog.show()
+
+        def _on_file_chooser_response(self, dialog, response) -> None:
+            debug_print(f"[CodeGluer] FileChooserNative response: {response}")
+            self._active_picker = None
+            accepted = response in (
+                Gtk.ResponseType.ACCEPT,
+                Gtk.ResponseType.OK,
+            )
+            debug_print(f"[CodeGluer] accepted={accepted}")
+            if accepted:
+                try:
+                    files = dialog.get_files()
+                    debug_print(f"[CodeGluer] get_files() returned: {files!r}")
+                except Exception as e:
+                    debug_print(f"[CodeGluer] get_files() raised: {e}")
+                    files = None
+                if files is None:
+                    debug_print("[CodeGluer] files is None — bailing")
+                else:
+                    try:
+                        n = files.get_n_items()
+                        debug_print(f"[CodeGluer] number of items selected: {n}")
+                        for i in range(n):
+                            gfile = files.get_item(i)
+                            if gfile is None:
+                                continue
+                            name = gfile.get_basename()
+                            debug_print(f"[CodeGluer]   item {i}: {name!r}")
+                            if name:
+                                self._add_exclude_chip(name)
+                    except Exception as e:
+                        import traceback
+                        debug_print(traceback.format_exc())
+                        self._show_error_dialog("Failed to process selected files", str(e))
+            else:
+                debug_print(f"[CodeGluer] user did not accept (response={response})")
+            dialog.destroy()
 
         def _execute(self, opts):
-            # Use absolute path for codegluer (fallback to ~/.local/bin)
             codegluer_path = shutil.which("codegluer") or os.path.expanduser("~/.local/bin/codegluer")
-            # Build command and replace the executable with absolute path
             cmd = [codegluer_path, *build_command(self.files, opts)[1:]]
 
             if self.dry_run:
@@ -436,7 +747,6 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
 
             save_theme(self.current_theme)
             try:
-                # Add timeout to avoid UI freeze (fix 1)
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
                 if result.returncode == 0:
                     output_name = opts["output"] or default_name(self.target_dir, opts["format"])
@@ -480,7 +790,6 @@ def main():
 
     files = [a for a in args if not a.startswith("-")]
     if not files:
-        # No files — maybe launched standalone
         env = os.environ.get("NAUTILUS_SCRIPT_SELECTED_FILE_PATHS", "") or \
               os.environ.get("NEMO_SCRIPT_SELECTED_FILE_PATHS", "")
         files = [f for f in env.splitlines() if f]

@@ -1,10 +1,12 @@
 """CodeGluer - Glue multiple code files into a single document."""
-__version__ = "1.0.0"
+__version__ = '1.0.0'
 
 from .core import (
     SEPARATOR_CHAR,
     SEPARATOR_LENGTH,
     EXT_TO_LANG,
+    DEFAULT_IGNORE_DIR_NAMES,
+    DEFAULT_MAX_TOTAL_BYTES,
     CodeGluerError,
     NoFilesError,
     NoReadableFilesError,
@@ -25,23 +27,25 @@ from .core import (
 
 __all__ = [
     "__version__",
-    "SEPARATOR_CHAR",
-    "SEPARATOR_LENGTH",
-    "EXT_TO_LANG",
     "CodeGluerError",
+    "DEFAULT_IGNORE_DIR_NAMES",
+    "DEFAULT_MAX_TOTAL_BYTES",
+    "EXT_TO_LANG",
+    "GlueConfig",
     "NoFilesError",
     "NoReadableFilesError",
     "OutputWriteError",
-    "GlueConfig",
-    "build_header",
-    "build_footer",
-    "build_markdown_section",
-    "detect_language",
-    "sanitize_filename_for_markdown",
-    "TreeNode",
-    "build_tree_structure",
-    "render_tree",
     "ProjectStats",
+    "SEPARATOR_CHAR",
+    "SEPARATOR_LENGTH",
+    "TreeNode",
+    "build_footer",
+    "build_header",
+    "build_markdown_section",
+    "build_tree_structure",
     "collect_files",
+    "detect_language",
     "glue_files",
+    "render_tree",
+    "sanitize_filename_for_markdown",
 ]
