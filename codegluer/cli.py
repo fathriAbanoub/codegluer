@@ -92,6 +92,16 @@ def main():
     parser.add_argument("--priority", action="append", metavar="GLOB", default=None,
         help="Glob pattern for files to place at the top (repeatable).")
 
+    # FIX (2026-07-04): these two flags are the user-facing controls for the
+    # OOM/freeze guards added to core.py (DEFAULT_IGNORE_DIR_NAMES /
+    # DEFAULT_MAX_TOTAL_BYTES). Do not remove them without also removing the
+    # corresponding GlueConfig fields — they exist together.
+    # Safety guards
+    parser.add_argument("--no-default-ignore", action="store_true",
+        help="Do NOT auto-skip node_modules/.git/dist/build/etc during recursive traversal.")
+    parser.add_argument("--max-size", type=non_negative_int, default=20,
+        help="Abort if glued content exceeds this many MB (default: 20). Use 0 to disable.")
+
     args = parser.parse_args()
 
     try:
@@ -111,6 +121,11 @@ def main():
             ai_prompt=args.ai_prompt,
             ai_prompt_file=args.ai_prompt_file,
             priority_patterns=args.priority or [],
+            # FIX (2026-07-04): wires --no-default-ignore / --max-size into
+            # the OOM/freeze guards. `0` must map to None (disabled), not 0
+            # bytes, or --max-size 0 would abort on the very first byte.
+            skip_default_ignore_dirs=not args.no_default_ignore,
+            max_total_bytes=(args.max_size * 1024 * 1024) if args.max_size else None,
         )
 
         output_path, count = glue_files(paths=args.paths, config=config)
