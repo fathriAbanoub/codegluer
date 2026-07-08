@@ -791,3 +791,25 @@ def test_zip_slip_protection(tmp_path):
                 output_path=str(tmp_path / "out.md"),
             ),
         )
+
+
+def test_zip_size_guard_rejects_oversized_archive(tmp_path):
+    """Zips whose declared uncompressed size exceeds max_total_bytes
+    must be rejected BEFORE extraction touches disk."""
+    import zipfile
+    # 1 MB of content, cap at 100 KB
+    big_content = "x" * (1024 * 1024)
+    zip_path = tmp_path / "big.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("big.txt", big_content)
+
+    with pytest.raises(codegluer.CodeGluerError, match="declares"):
+        codegluer.glue_files(
+            [str(zip_path)],
+            config=codegluer.GlueConfig(
+                output_format="markdown",
+                recursive=True,
+                output_path=str(tmp_path / "out.md"),
+                max_total_bytes=100 * 1024,  # 100 KB cap
+            ),
+        )
