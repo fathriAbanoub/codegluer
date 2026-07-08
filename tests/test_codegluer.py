@@ -704,3 +704,112 @@ class TestAIContextFeatures:
         for name in sample_files:
             assert f"BEGIN FILE: {name}" in content
             assert f"END FILE: {name}" in content
+
+
+# ======================================================================
+# ZIP TESTS (with fixes for unused variables and added zip-slip test)
+# ======================================================================
+
+def test_zip_input_with_explicit_output(tmp_path):
+    """Test zip extraction with explicit output path."""
+    import zipfile
+    # Build a fake GitHub-style zip: repo-main/{README.md, src/app.py}
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "app.py").write_text("print('hi')")
+    readme = tmp_path / "README.md"
+    readme.write_text("# Hi")
+    zip_path = tmp_path / "repo-main.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        # GitHub convention: single top-level folder (dirs are implicit)
+        zf.write(readme, "repo-main/README.md")
+        zf.write(src_dir / "app.py", "repo-main/src/app.py")
+
+    out = tmp_path / "out.md"
+    # Use underscore for unused result_path
+    _result_path, count = codegluer.glue_files(
+        [str(zip_path)],
+        config=codegluer.GlueConfig(
+            output_format="markdown",
+            recursive=True,
+            show_tree=True,
+            output_path=str(out),
+        ),
+    )
+    content = out.read_text()
+    # Unwrap worked: tree shows src/app.py, NOT repo-main/src/app.py
+    assert "repo-main" not in content
+    assert "src/app.py" in content
+    assert "README.md" in content
+    assert count == 2
+
+
+def test_zip_input_default_output_path(tmp_path):
+    """Test that default output lands next to the zip, not in /tmp.
+    This catches the critical bug where output would be deleted with the temp dir."""
+    import zipfile
+    # Build a simple zip
+    (tmp_path / "file.py").write_text("print('test')")
+    zip_path = tmp_path / "test.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.write(tmp_path / "file.py", "test/file.py")
+
+    # No output_path — should default to <zip's parent>/glued_code.md
+    result_path, _count = codegluer.glue_files(
+        [str(zip_path)],
+        config=codegluer.GlueConfig(
+            output_format="markdown",
+            recursive=True,
+        ),
+    )
+    # Critical: output must exist and be next to the zip
+    assert Path(result_path).exists()
+    # Use Path.parent comparison, NOT startswith — startswith has a subtle
+    # partial-match bug (/tmp/foo vs /tmp/foobar).
+    assert Path(result_path).parent == tmp_path
+    assert Path(result_path).suffix == ".md"
+    assert "glued_code" in Path(result_path).name  # allows timestamp suffix
+    content = Path(result_path).read_text()
+    assert "file.py" in content
+
+
+def test_zip_slip_protection(tmp_path):
+    """Zip entries that escape dest_dir must be rejected with CodeGluerError.
+    Regression test for the zip-slip guard in _extract_zip."""
+    import zipfile
+    zip_path = tmp_path / "evil.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        # Malicious entry: resolves outside dest_dir
+        zf.writestr("../../evil.txt", "pwned")
+
+    with pytest.raises(codegluer.CodeGluerError, match="path traversal"):
+        codegluer.glue_files(
+            [str(zip_path)],
+            config=codegluer.GlueConfig(
+                output_format="markdown",
+                recursive=True,
+                output_path=str(tmp_path / "out.md"),
+            ),
+        )
+
+
+def test_zip_size_guard_rejects_oversized_archive(tmp_path):
+    """Zips whose declared uncompressed size exceeds max_total_bytes
+    must be rejected BEFORE extraction touches disk."""
+    import zipfile
+    # 1 MB of content, cap at 100 KB
+    big_content = "x" * (1024 * 1024)
+    zip_path = tmp_path / "big.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("big.txt", big_content)
+
+    with pytest.raises(codegluer.CodeGluerError, match="declares"):
+        codegluer.glue_files(
+            [str(zip_path)],
+            config=codegluer.GlueConfig(
+                output_format="markdown",
+                recursive=True,
+                output_path=str(tmp_path / "out.md"),
+                max_total_bytes=100 * 1024,  # 100 KB cap
+            ),
+        )

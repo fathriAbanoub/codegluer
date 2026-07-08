@@ -96,7 +96,8 @@ def default_name(target_dir: str, fmt: str, existing: set | None = None) -> str:
 
 
 def is_any_dir(files: list[str]) -> bool:
-    return any(os.path.isdir(f) for f in files)
+    # Treat .zip files as directories (they are expanded and glued recursively)
+    return any(os.path.isdir(f) or str(f).lower().endswith(".zip") for f in files)
 
 
 def target_dir_of(files: list[str]) -> str:

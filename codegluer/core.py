@@ -3,8 +3,12 @@ import os
 import re
 import datetime
 import logging
+import shutil
+import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from contextlib import contextmanager
 import pathspec
 
 logger = logging.getLogger(__name__)
@@ -152,6 +156,76 @@ def _get_common_base(resolved_paths):
         # Paths on different drives (Windows)
         return Path.cwd()
 
+# ─────────────────────────────────────────────────────────────────────
+# Zip helpers
+# ─────────────────────────────────────────────────────────────────────
+
+@contextmanager
+def _zip_expander(paths, max_total_bytes=None):
+    """Expand .zip inputs to temp dirs, yield expanded paths, clean up on exit.
+    GitHub zips have a single top-level folder (reponame-branch/); we unwrap it
+    so the tree shows src/app.py, not repo-main/src/app.py.
+    ponytail: naive unwrap — if a zip legitimately has one top-level dir that
+    *is* the project, we still unwrap. Fine for GitHub zips. Upgrade path:
+    --no-unwrap-zip flag if anyone asks.
+    ponytail: mixing .zip inputs with other paths (e.g., `codegluer foo.zip bar/`)
+    produces weird display names because the expanded zip path and the other
+    path have a distant common ancestor. Known limitation — users should
+    extract zips manually if they need to mix them with other paths.
+    """
+    temp_dirs = []
+    try:
+        expanded = []
+        for p in paths:
+            if str(p).lower().endswith(".zip"):
+                td = tempfile.mkdtemp(prefix="codegluer_zip_")
+                temp_dirs.append(td)
+                expanded.append(str(_extract_zip(p, td, max_total_bytes=max_total_bytes)))
+            else:
+                expanded.append(p)
+        yield expanded
+    finally:
+        for td in temp_dirs:
+            shutil.rmtree(td, ignore_errors=True)
+
+def _extract_zip(zip_path: str, dest_dir: str, max_total_bytes: int | None = None) -> Path:
+    """Extract zip to dest_dir. Unwrap single top-level dir (GitHub convention)."""
+    dest = Path(dest_dir).resolve()
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        # Pre-extraction size guard: reject zips whose declared uncompressed
+        # size exceeds the cap BEFORE we touch disk. Uses ZipInfo.file_size
+        # (declared in central directory) — adequate for accidental-large
+        # inputs; NOT a defense against adversarial zip-bombs (attacker can
+        # lie about sizes), but that's out of scope for this tool.
+        if max_total_bytes is not None:
+            total_uncompressed = sum(info.file_size for info in zf.infolist())
+            if total_uncompressed > max_total_bytes:
+                raise CodeGluerError(
+                    f"Aborting: zip '{zip_path}' declares "
+                    f"{total_uncompressed / (1024 * 1024):.0f}MB uncompressed, "
+                    f"exceeds {max_total_bytes / (1024 * 1024):.0f}MB limit. "
+                    "Use --max-size <MB> to raise the limit (0 disables)."
+                )
+        # Zip-slip guard
+        for name in zf.namelist():
+            target = (dest / name).resolve()
+            if not str(target).startswith(str(dest) + os.sep) and target != dest:
+                raise CodeGluerError(f"Unsafe zip entry (path traversal): {name}")
+        zf.extractall(dest)
+    # Unwrap single top-level dir (GitHub convention: reponame-branch/)
+    entries = [e for e in dest.iterdir() if not e.name.startswith(("__MACOSX", "."))]
+    if len(entries) == 1 and entries[0].is_dir():
+        return entries[0]
+    return dest
+
+def _compute_original_output_base(paths) -> Path:
+    """Compute where default output should land, BEFORE zip expansion.
+    This ensures output lands next to the original .zip, not in /tmp."""
+    if not paths:
+        return Path.cwd()
+    first = Path(paths[0]).resolve()
+    return first.parent if first.is_file() else first
+
 # ---------------------------------------------------------
 # Filtering & .gitignore Logic
 # ---------------------------------------------------------
@@ -196,7 +270,6 @@ class TreeNode:
         self.is_dir = is_dir
         self.children: list | None = [] if is_dir else None
 
-
 def build_tree_structure(file_paths, base_dir) -> TreeNode:
     """Build a TreeNode tree from a flat list of resolved Path objects relative to base_dir."""
     root = TreeNode(".", is_dir=True)
@@ -238,7 +311,6 @@ def build_tree_structure(file_paths, base_dir) -> TreeNode:
 
     sort_children(root)
     return root
-
 
 def render_tree(node, prefix="", max_per_dir=10, max_depth=None, depth=0) -> list[str]:
     """Render the tree as a list of strings using box-drawing connectors."""
@@ -437,18 +509,32 @@ def collect_files(
     return collected
 
 # ─────────────────────────────────────────────────────────────────────
-# glue_files (with GlueConfig support)
+# glue_files (public wrapper) and _glue_files_impl
 # ─────────────────────────────────────────────────────────────────────
 
 def glue_files(paths, config: GlueConfig | None = None) -> tuple[str, int]:
-    # Ensure paths can be iterated multiple times (e.g., if a generator is passed)
+    """Public entry point. Handles zip expansion and delegates to _glue_files_impl."""
     paths = list(paths)
-
     if config is None:
         config = GlueConfig()
 
+    # Validate output_format early (fail-fast, avoids useless extraction)
     if config.output_format not in ("plain", "markdown"):
         raise ValueError(f"Invalid output_format: {config.output_format!r}. Must be 'plain' or 'markdown'.")
+
+    # Capture original output base BEFORE zip expansion — critical fix.
+    original_output_base = _compute_original_output_base(paths)
+
+    # Pass max_total_bytes to the zip expander so we can reject oversized zips
+    # before they are extracted to disk.
+    with _zip_expander(paths, max_total_bytes=config.max_total_bytes) as expanded:
+        return _glue_files_impl(expanded, config, original_output_base)
+
+
+def _glue_files_impl(paths, config: GlueConfig, output_base_dir: Path) -> tuple[str, int]:
+    """The actual gluing logic. Called by glue_files() after zip expansion."""
+    # Ensure paths can be iterated multiple times (e.g., if a generator is passed)
+    paths = list(paths)
 
     if not paths:
         raise NoFilesError("No paths provided.")
@@ -469,10 +555,12 @@ def glue_files(paths, config: GlueConfig | None = None) -> tuple[str, int]:
     if not file_paths:
         raise NoReadableFilesError("No files could be read after filtering.")
 
-    # Compute output base from first input path to ensure writable location
     resolved_input_paths = [Path(p).resolve() for p in paths]
-    first_resolved = resolved_input_paths[0]
-    output_base_dir = first_resolved.parent if first_resolved.is_file() else first_resolved
+    # ── CRITICAL: use the passed-in output_base_dir, NOT first_resolved.parent.
+    # The passed-in value was computed from the ORIGINAL paths before zip expansion,
+    # so default output lands next to the original .zip, not in /tmp.
+    # (output_base_dir is now a parameter, not computed here.)
+
     # Compute display base as common base for relative paths
     display_base_dir = _get_common_base(resolved_input_paths)
 
@@ -520,7 +608,7 @@ def glue_files(paths, config: GlueConfig | None = None) -> tuple[str, int]:
         if not filepath.is_file():
             logger.warning(f"Skipping '{filepath}' (not a regular file).")
             continue
-            
+
         if _is_likely_binary(filepath):
             logger.warning(f"Skipping '{filepath}' (appears to be a binary file).")
             continue
