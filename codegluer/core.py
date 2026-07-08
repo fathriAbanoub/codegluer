@@ -161,7 +161,7 @@ def _get_common_base(resolved_paths):
 # ─────────────────────────────────────────────────────────────────────
 
 @contextmanager
-def _zip_expander(paths):
+def _zip_expander(paths, max_total_bytes=None):
     """Expand .zip inputs to temp dirs, yield expanded paths, clean up on exit.
     GitHub zips have a single top-level folder (reponame-branch/); we unwrap it
     so the tree shows src/app.py, not repo-main/src/app.py.
@@ -180,7 +180,7 @@ def _zip_expander(paths):
             if str(p).lower().endswith(".zip"):
                 td = tempfile.mkdtemp(prefix="codegluer_zip_")
                 temp_dirs.append(td)
-                expanded.append(str(_extract_zip(p, td)))
+                expanded.append(str(_extract_zip(p, td, max_total_bytes=max_total_bytes)))
             else:
                 expanded.append(p)
         yield expanded
@@ -188,10 +188,24 @@ def _zip_expander(paths):
         for td in temp_dirs:
             shutil.rmtree(td, ignore_errors=True)
 
-def _extract_zip(zip_path: str, dest_dir: str) -> Path:
+def _extract_zip(zip_path: str, dest_dir: str, max_total_bytes: int | None = None) -> Path:
     """Extract zip to dest_dir. Unwrap single top-level dir (GitHub convention)."""
     dest = Path(dest_dir).resolve()
     with zipfile.ZipFile(zip_path, "r") as zf:
+        # Pre-extraction size guard: reject zips whose declared uncompressed
+        # size exceeds the cap BEFORE we touch disk. Uses ZipInfo.file_size
+        # (declared in central directory) — adequate for accidental-large
+        # inputs; NOT a defense against adversarial zip-bombs (attacker can
+        # lie about sizes), but that's out of scope for this tool.
+        if max_total_bytes is not None:
+            total_uncompressed = sum(info.file_size for info in zf.infolist())
+            if total_uncompressed > max_total_bytes:
+                raise CodeGluerError(
+                    f"Aborting: zip '{zip_path}' declares "
+                    f"{total_uncompressed / (1024 * 1024):.0f}MB uncompressed, "
+                    f"exceeds {max_total_bytes / (1024 * 1024):.0f}MB limit. "
+                    "Use --max-size <MB> to raise the limit (0 disables)."
+                )
         # Zip-slip guard
         for name in zf.namelist():
             target = (dest / name).resolve()
@@ -511,7 +525,9 @@ def glue_files(paths, config: GlueConfig | None = None) -> tuple[str, int]:
     # Capture original output base BEFORE zip expansion — critical fix.
     original_output_base = _compute_original_output_base(paths)
 
-    with _zip_expander(paths) as expanded:
+    # Pass max_total_bytes to the zip expander so we can reject oversized zips
+    # before they are extracted to disk.
+    with _zip_expander(paths, max_total_bytes=config.max_total_bytes) as expanded:
         return _glue_files_impl(expanded, config, original_output_base)
 
 

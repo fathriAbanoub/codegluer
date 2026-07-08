@@ -707,7 +707,7 @@ class TestAIContextFeatures:
 
 
 # ======================================================================
-# NEW ZIP TESTS
+# ZIP TESTS (with fixes for unused variables and added zip-slip test)
 # ======================================================================
 
 def test_zip_input_with_explicit_output(tmp_path):
@@ -726,7 +726,8 @@ def test_zip_input_with_explicit_output(tmp_path):
         zf.write(src_dir / "app.py", "repo-main/src/app.py")
 
     out = tmp_path / "out.md"
-    result_path, count = codegluer.glue_files(
+    # Use underscore for unused result_path
+    _result_path, count = codegluer.glue_files(
         [str(zip_path)],
         config=codegluer.GlueConfig(
             output_format="markdown",
@@ -754,7 +755,7 @@ def test_zip_input_default_output_path(tmp_path):
         zf.write(tmp_path / "file.py", "test/file.py")
 
     # No output_path — should default to <zip's parent>/glued_code.md
-    result_path, count = codegluer.glue_files(
+    result_path, _count = codegluer.glue_files(
         [str(zip_path)],
         config=codegluer.GlueConfig(
             output_format="markdown",
@@ -770,3 +771,23 @@ def test_zip_input_default_output_path(tmp_path):
     assert "glued_code" in Path(result_path).name  # allows timestamp suffix
     content = Path(result_path).read_text()
     assert "file.py" in content
+
+
+def test_zip_slip_protection(tmp_path):
+    """Zip entries that escape dest_dir must be rejected with CodeGluerError.
+    Regression test for the zip-slip guard in _extract_zip."""
+    import zipfile
+    zip_path = tmp_path / "evil.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        # Malicious entry: resolves outside dest_dir
+        zf.writestr("../../evil.txt", "pwned")
+
+    with pytest.raises(codegluer.CodeGluerError, match="path traversal"):
+        codegluer.glue_files(
+            [str(zip_path)],
+            config=codegluer.GlueConfig(
+                output_format="markdown",
+                recursive=True,
+                output_path=str(tmp_path / "out.md"),
+            ),
+        )
