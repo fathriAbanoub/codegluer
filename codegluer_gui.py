@@ -54,19 +54,22 @@ _HEAVY_DIR_HINTS = {
 }
 
 
+# ─── FIXED: only flag the directory ITSELF if it is a heavy hint ──────
 def _looks_heavy(path: str, scan_limit: int = 500) -> bool:
-    """Cheap heuristic, not a full walk: does this directory contain a known
-    dependency/build folder, or an unusually large number of direct entries?
+    """Cheap heuristic: is this directory itself a known heavy folder,
+    or does it have an unusually large number of direct entries?
     Opening a native file picker's initial folder inside something like
     node_modules is a known way to freeze GTK file choosers while they
-    enumerate and thumbnail everything — this just avoids that trigger."""
+    enumerate and thumbnail everything — this avoids that trigger."""
     try:
+        # Check if the directory itself is a heavy name (e.g., node_modules)
+        if os.path.basename(os.path.normpath(path)) in _HEAVY_DIR_HINTS:
+            return True
+        # Otherwise, scan for number of entries (avoid excessive enumeration)
         with os.scandir(path) as it:
             count = 0
-            for entry in it:
+            for _entry in it:
                 count += 1
-                if entry.name in _HEAVY_DIR_HINTS and entry.is_dir():
-                    return True
                 if count > scan_limit:
                     return True
     except OSError:
