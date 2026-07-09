@@ -108,6 +108,164 @@ def target_dir_of(files: list[str]) -> str:
     return parent if parent else "."
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Scope enforcement (FIX 2026-07-09: exclude-outside-sel bug)
+#
+# The exclude feature MUST only operate on files that could actually be
+# glued. Without this, the Browse picker lets you select /etc/passwd and
+# silently turns it into a `--exclude passwd` glob that strips every file
+# named `passwd` from your project. We now compute an explicit "scope"
+# (the set of allowed root directories derived from the selection) and
+# reject any exclude pattern or picked path that falls outside it.
+#
+# Zips are deliberately NOT scope roots — their contents are unknown to
+# the GUI until the CLI extracts them, so file-picking is meaningless
+# for zip inputs. The Browse button is hidden when the scope is empty.
+# ──────────────────────────────────────────────────────────────────────
+
+def compute_scope_roots(files: list[str]) -> list[str]:
+    """Return the list of absolute directory paths that form the operation
+    scope. Only real selected directories count — zip inputs are excluded
+    (contents unknown to the GUI), and bare selected files contribute
+    nothing (you can only exclude what's actually being glued; for a
+    bare file, that's just the file itself — there's nothing to browse).
+    """
+    roots: list[str] = []
+    seen: set[str] = set()
+    for f in files:
+        if str(f).lower().endswith(".zip"):
+            continue
+        try:
+            p = os.path.realpath(os.path.expanduser(f))
+        except OSError:
+            continue
+        if os.path.isdir(p) and p not in seen:
+            seen.add(p)
+            roots.append(p)
+    return roots
+
+
+def is_path_in_scope(path: str, scope_roots: list[str]) -> bool:
+    """True if `path` resolves to a location inside one of `scope_roots`."""
+    if not scope_roots:
+        return False
+    try:
+        resolved = os.path.realpath(os.path.expanduser(path))
+    except OSError:
+        return False
+    for root in scope_roots:
+        try:
+            root_resolved = os.path.realpath(root)
+        except OSError:
+            continue
+        if resolved == root_resolved:
+            return True
+        # Path-is-prefix check, with explicit separator to defeat
+        # /home/foo vs /home/foobar style confusion.
+        if resolved.startswith(root_resolved + os.sep):
+            return True
+    return False
+
+
+def relative_to_scope(path: str, scope_roots: list[str]) -> str | None:
+    """Return `path` made relative to whichever scope root contains it.
+    Returns None if the path is not in any scope root."""
+    try:
+        resolved = os.path.realpath(os.path.expanduser(path))
+    except OSError:
+        return None
+    best_root = None
+    best_rel = None
+    for root in scope_roots:
+        try:
+            root_resolved = os.path.realpath(root)
+        except OSError:
+            continue
+        try:
+            rel = os.path.relpath(resolved, root_resolved)
+        except ValueError:
+            continue
+        if rel == ".":
+            # Path is the root itself — nothing meaningful to exclude.
+            continue
+        if rel.startswith(".."):
+            continue
+        # Pick the longest root (most specific) so the chip shows the
+        # tightest relative path.
+        if best_root is None or len(root_resolved) > len(best_root):
+            best_root = root_resolved
+            best_rel = rel
+    return best_rel
+
+
+def validate_exclude_pattern(pattern: str, scope_roots: list[str]) -> tuple[bool, str, str]:
+    """Validate a manually-typed or picked exclude pattern.
+
+    Returns (ok, cleaned_pattern, error_message).
+
+    Rules:
+      1. Strip whitespace, leading `./`, trailing `/`.
+      2. Reject empty.
+      3. Reject absolute paths (starts with `/` or resolves to one). The
+         GUI has no business excluding absolute filesystem paths — they
+         can only ever be a user mistake.
+      4. Reject user-home paths (`~...`).
+      5. Reject `..` traversals that escape all scope roots.
+      6. If the pattern is a real path inside scope, return it as a
+         relative path so the chip matches what the user actually picked.
+      7. Otherwise (pure glob like `*.py`, `node_modules`, `**/*.log`),
+         accept as-is. These can only match inside the input set anyway.
+    """
+    raw = pattern.strip()
+    if raw.startswith("./"):
+        raw = raw[2:]
+    if raw.endswith("/"):
+        raw = raw[:-1]
+    if not raw:
+        return False, "", "Pattern is empty."
+
+    # Reject obvious absolute / home references up front.
+    if raw.startswith("/") or raw.startswith("~"):
+        return False, "", (
+            f"Absolute paths are not allowed as exclude patterns "
+            f"(got {raw!r}). Excludes only apply to files inside the "
+            f"selected directory or zip."
+        )
+
+    # If the pattern contains path separators OR starts with `..`, it can
+    # only be meaningful as a path relative to a scope root. With no scope
+    # roots (zip-only selection) there's nothing to anchor against, so
+    # reject — the user must type a plain glob without separators instead.
+    if os.sep in raw or "/" in raw or raw.startswith(".."):
+        if not scope_roots:
+            return False, "", (
+                f"Pattern {raw!r} contains a path separator or '..', "
+                f"but this selection has no browsable scope — only plain "
+                f"glob patterns without '/' are allowed here."
+            )
+        # Try interpreting it as a path relative to each scope root.
+        # If it resolves outside all of them, reject.
+        in_scope = False
+        for root in scope_roots:
+            candidate = os.path.realpath(os.path.join(root, raw))
+            if is_path_in_scope(candidate, [root]):
+                in_scope = True
+                break
+        if not in_scope:
+            return False, "", (
+                f"Pattern {raw!r} resolves outside the selected "
+                f"directory or zip. Excludes can only target files "
+                f"inside the selection."
+            )
+        # Normalize to forward slashes for pathspec consistency.
+        cleaned = raw.replace(os.sep, "/")
+        return True, cleaned, ""
+
+    # Pure name/glob pattern (no separators, no `..`). Accept as-is.
+    return True, raw, ""
+
+
+
 def should_update_default(current_text: str, target_dir: str) -> bool:
     """True if the output field still holds a default value (or is empty),
     meaning a format switch may safely update the extension. False if the
@@ -297,6 +455,11 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             self.dry_run = dry_run
             self.current_theme = read_theme()
 
+            # FIX (2026-07-09): operation scope — the set of directories
+            # the exclude feature is allowed to operate on. Empty for
+            # zip-only inputs, which disables the Browse button.
+            self.scope_roots = compute_scope_roots(files)
+
             # State
             self.format = "markdown"
             self.output_entry = None
@@ -347,6 +510,20 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             info.set_use_markup(True)
             content.append(info)
 
+            # If the scope is empty (e.g. zip-only selection), warn the
+            # user that Browse is disabled and excludes must be typed.
+            if self.any_dir and not self.scope_roots:
+                scope_warn = Gtk.Label(
+                    label=(
+                        "<i>Zip inputs can't be browsed — type exclude "
+                        "patterns manually (e.g. <tt>node_modules</tt>, "
+                        "<tt>*.log</tt>).</i>"
+                    )
+                )
+                scope_warn.set_use_markup(True)
+                scope_warn.set_halign(Gtk.Align.START)
+                content.append(scope_warn)
+
             grid = Gtk.Grid()
             grid.set_row_spacing(8)
             grid.set_column_spacing(12)
@@ -365,43 +542,48 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             grid.attach(self.output_entry, 1, row, 1, 1)
             row += 1
 
-            # Exclude patterns
-            grid.attach(Gtk.Label(label="Exclude:", halign=Gtk.Align.END, valign=Gtk.Align.START), 0, row, 1, 1)
-
-            exclude_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            exclude_row.set_hexpand(True)
-            exclude_row.set_valign(Gtk.Align.START)
-
-            exclude_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-            exclude_box.add_css_class("chip-box")
-            exclude_box.set_hexpand(True)
-            exclude_row.append(exclude_box)
-
-            self.chip_flowbox = Gtk.FlowBox()
-            self.chip_flowbox.set_selection_mode(Gtk.SelectionMode.NONE)
-            self.chip_flowbox.set_max_children_per_line(20)
-            self.chip_flowbox.set_min_children_per_line(1)
-            self.chip_flowbox.set_column_spacing(4)
-            self.chip_flowbox.set_row_spacing(4)
-            self.chip_flowbox.set_visible(False)
-            exclude_box.append(self.chip_flowbox)
-
-            self.manual_exclude_entry = Gtk.Entry()
-            self.manual_exclude_entry.set_placeholder_text(
-                "Type a pattern and press Enter, or click Browse…"
-            )
-            self.manual_exclude_entry.set_hexpand(True)
-            self.manual_exclude_entry.connect("activate", self._on_manual_exclude_activate)
-            exclude_box.append(self.manual_exclude_entry)
-
-            browse_btn = Gtk.Button(label="Browse…")
-            browse_btn.set_tooltip_text("Select files to exclude")
-            browse_btn.set_valign(Gtk.Align.CENTER)
-            browse_btn.connect("clicked", self._on_browse_clicked)
-            exclude_row.append(browse_btn)
-
-            grid.attach(exclude_row, 1, row, 1, 1)
-            row += 1
+            # Exclude patterns — only show when directories or zips are selected
+            if self.any_dir:
+                grid.attach(Gtk.Label(label="Exclude:", halign=Gtk.Align.END, valign=Gtk.Align.START), 0, row, 1, 1)
+                exclude_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                exclude_row.set_hexpand(True)
+                exclude_row.set_valign(Gtk.Align.START)
+                exclude_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                exclude_box.add_css_class("chip-box")
+                exclude_box.set_hexpand(True)
+                exclude_row.append(exclude_box)
+                self.chip_flowbox = Gtk.FlowBox()
+                self.chip_flowbox.set_selection_mode(Gtk.SelectionMode.NONE)
+                self.chip_flowbox.set_max_children_per_line(20)
+                self.chip_flowbox.set_min_children_per_line(1)
+                self.chip_flowbox.set_column_spacing(4)
+                self.chip_flowbox.set_row_spacing(4)
+                self.chip_flowbox.set_visible(False)
+                exclude_box.append(self.chip_flowbox)
+                self.manual_exclude_entry = Gtk.Entry()
+                self.manual_exclude_entry.set_placeholder_text(
+                    "Type a pattern and press Enter, or click Browse…"
+                )
+                self.manual_exclude_entry.set_hexpand(True)
+                self.manual_exclude_entry.connect("activate", self._on_manual_exclude_activate)
+                exclude_box.append(self.manual_exclude_entry)
+                browse_btn = Gtk.Button(label="Browse…")
+                browse_btn.set_tooltip_text("Select files to exclude")
+                browse_btn.set_valign(Gtk.Align.CENTER)
+                browse_btn.connect("clicked", self._on_browse_clicked)
+                # FIX (2026-07-09): disable Browse when there is no scope
+                # to browse (zip-only inputs). The picker would otherwise
+                # land in the zip's parent dir, which has nothing to do
+                # with the zip's contents.
+                if not self.scope_roots:
+                    browse_btn.set_sensitive(False)
+                    browse_btn.set_tooltip_text(
+                        "Browse is disabled for zip-only selections — "
+                        "type patterns manually instead."
+                    )
+                exclude_row.append(browse_btn)
+                grid.attach(exclude_row, 1, row, 1, 1)
+                row += 1
 
             # Format dropdown
             grid.attach(Gtk.Label(label="Format:", halign=Gtk.Align.END), 0, row, 1, 1)
@@ -514,17 +696,47 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
 
         # ── Exclude chips ────────────────────────────────────────────────
 
-        def _normalize_exclude_pattern(self, text: str) -> str:
-            text = text.strip()
-            if text.startswith('./'):
-                text = text[2:]
-            if text.endswith('/'):
-                text = text[:-1]
-            return text
+        def _validate_and_clean_pattern(self, text: str) -> tuple[bool, str, str]:
+            """Wrap validate_exclude_pattern() with this window's scope_roots."""
+            return validate_exclude_pattern(text, self.scope_roots)
+
+        def _create_and_insert_chip(self, normalized: str) -> None:
+            """Append `normalized` to self.excludes and insert its chip widget.
+            Caller is responsible for dedup check — both callers have
+            different dedup behavior (typed-entry logs+skips, picked-path
+            returns idempotent success), so dedup stays in the callers.
+            Raises whatever GTK raises; callers wrap in their own try/except."""
+            self.excludes.append(normalized)
+            chip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            chip.add_css_class("chip")
+            chip.set_halign(Gtk.Align.START)
+            chip.set_valign(Gtk.Align.CENTER)
+            label = Gtk.Label(label=normalized)
+            label.set_max_width_chars(30)
+            label.set_ellipsize(Pango.EllipsizeMode.END)
+            label.set_tooltip_text(normalized)
+            chip.append(label)
+            close_btn = Gtk.Button(label="✕")
+            close_btn.add_css_class("chip-close")
+            close_btn.set_tooltip_text(f"Remove {normalized}")
+            close_btn.connect(
+                "clicked",
+                lambda *_: self._remove_exclude_chip(normalized, chip),
+            )
+            chip.append(close_btn)
+            self.chip_flowbox.insert(chip, -1)
+            self.chip_flowbox.set_visible(True)
 
         def _add_exclude_chip(self, text: str) -> None:
-            normalized = self._normalize_exclude_pattern(text)
-            debug_print(f"[CodeGluer] _add_exclude_chip({text!r}) -> normalized {normalized!r}")
+            ok, normalized, err = self._validate_and_clean_pattern(text)
+            debug_print(
+                f"[CodeGluer] _add_exclude_chip({text!r}) -> "
+                f"ok={ok}, normalized={normalized!r}, err={err!r}"
+            )
+            if not ok:
+                debug_print(f"[CodeGluer]   rejected: {err}")
+                self._show_error_dialog("Invalid exclude pattern", err)
+                return
             if not normalized:
                 debug_print("[CodeGluer]   skipped: empty after normalization")
                 return
@@ -532,32 +744,48 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
                 debug_print("[CodeGluer]   skipped: duplicate")
                 return
             try:
-                self.excludes.append(normalized)
-
-                chip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-                chip.add_css_class("chip")
-                chip.set_halign(Gtk.Align.START)
-                chip.set_valign(Gtk.Align.CENTER)
-
-                label = Gtk.Label(label=normalized)
-                label.set_max_width_chars(30)
-                label.set_ellipsize(Pango.EllipsizeMode.END)
-                label.set_tooltip_text(normalized)
-                chip.append(label)
-
-                close_btn = Gtk.Button(label="✕")
-                close_btn.add_css_class("chip-close")
-                close_btn.set_tooltip_text(f"Remove {normalized}")
-                close_btn.connect("clicked", lambda *_: self._remove_exclude_chip(normalized, chip))
-                chip.append(close_btn)
-
-                self.chip_flowbox.insert(chip, -1)
-                self.chip_flowbox.set_visible(True)
+                self._create_and_insert_chip(normalized)
                 debug_print(f"[CodeGluer]   added. total excludes now: {len(self.excludes)}")
             except Exception as e:
                 import traceback
                 debug_print(traceback.format_exc())
                 self._show_error_dialog("Failed to add exclude chip", str(e))
+
+        def _add_picked_path_as_chip(self, gfile) -> tuple[bool, str]:
+            """Convert a picked GFile into a scope-relative exclude chip.
+
+            Returns (accepted, reason). When accepted, the chip is added
+            and the relative path is returned. When rejected, reason
+            explains why (path outside scope, etc.).
+            """
+            try:
+                path = gfile.get_path()  # absolute local path, or None
+            except Exception:
+                path = None
+            if not path:
+                # Fallback: basename only. We can't scope-check it, so be
+                # conservative and reject — forces the user to type the
+                # pattern manually so they see what they're doing.
+                return False, "Selected file has no local path (remote or invalid)."
+            if not is_path_in_scope(path, self.scope_roots):
+                return False, (
+                    f"{path} is outside the selected directory or zip. "
+                    f"Excludes can only target files inside the selection."
+                )
+            rel = relative_to_scope(path, self.scope_roots)
+            if not rel:
+                return False, f"{path} could not be made relative to the selection."
+            # We already proved scope membership with realpath, so bypass
+            # validate_exclude_pattern's glob-only assumption for slash-containing
+            # relative paths.
+            normalized = rel.replace(os.sep, "/")
+            if normalized in self.excludes:
+                return True, normalized  # idempotent
+            try:
+                self._create_and_insert_chip(normalized)
+            except Exception as e:
+                return False, f"Failed to add chip: {e}"
+            return True, normalized
 
         def _remove_exclude_chip(self, text: str, chip_widget) -> None:
             """Remove a chip widget and its pattern from the excludes list."""
@@ -635,10 +863,16 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             dialog = Gtk.FileDialog()
             dialog.set_title("Select files to exclude")
             dialog.set_modal(True)
+            # FIX (2026-07-09): point the picker at a scope root, not at
+            # the zip's parent dir. If there are multiple roots we pick
+            # the first; the user can still navigate to siblings from
+            # there. Out-of-scope picks are rejected in the response
+            # callback regardless.
+            initial_folder = self.scope_roots[0] if self.scope_roots else None
             try:
-                if (self.target_dir and os.path.isdir(self.target_dir)
-                        and not _looks_heavy(self.target_dir)):
-                    dialog.set_initial_folder(Gio.File.new_for_path(self.target_dir))
+                if initial_folder and os.path.isdir(initial_folder) \
+                        and not _looks_heavy(initial_folder):
+                    dialog.set_initial_folder(Gio.File.new_for_path(initial_folder))
             except Exception:
                 pass
             self._active_picker = dialog
@@ -666,20 +900,36 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             if n == 0:
                 debug_print("[CodeGluer] no items selected — bailing")
                 return
+            rejected: list[str] = []
             try:
                 for i in range(n):
                     gfile = files.get_item(i)
                     if gfile is None:
                         debug_print(f"[CodeGluer]   item {i} is None")
                         continue
-                    name = gfile.get_basename()
-                    debug_print(f"[CodeGluer]   item {i}: {name!r}")
-                    if name:
-                        self._add_exclude_chip(name)
+                    ok, info = self._add_picked_path_as_chip(gfile)
+                    if ok:
+                        debug_print(f"[CodeGluer]   item {i}: accepted as {info!r}")
+                    else:
+                        rejected.append(info)
+                        debug_print(f"[CodeGluer]   item {i}: rejected ({info})")
             except Exception as e:
                 import traceback
                 debug_print(traceback.format_exc())
                 self._show_error_dialog("Failed to process selected files", str(e))
+                return
+            if rejected:
+                # Tell the user which picks were thrown out and why.
+                summary = "\n".join(f"• {r}" for r in rejected[:10])
+                if len(rejected) > 10:
+                    summary += f"\n… and {len(rejected) - 10} more."
+                self._show_error_dialog(
+                    f"Rejected {len(rejected)} of {n} pick(s)",
+                    (
+                        "Only files inside the selected directory or zip "
+                        "can be excluded.\n\n" + summary
+                    ),
+                )
 
         def _open_file_chooser_dialog(self) -> None:
             dialog = Gtk.FileChooserNative.new(
@@ -690,10 +940,11 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
                 cancel_label="_Cancel",
             )
             dialog.set_select_multiple(True)
+            initial_folder = self.scope_roots[0] if self.scope_roots else None
             try:
-                if (self.target_dir and os.path.isdir(self.target_dir)
-                        and not _looks_heavy(self.target_dir)):
-                    dialog.set_current_folder(Gio.File.new_for_path(self.target_dir))
+                if initial_folder and os.path.isdir(initial_folder) \
+                        and not _looks_heavy(initial_folder):
+                    dialog.set_current_folder(Gio.File.new_for_path(initial_folder))
             except Exception:
                 pass
             dialog.connect("response", self._on_file_chooser_response)
@@ -721,14 +972,28 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
                     try:
                         n = files.get_n_items()
                         debug_print(f"[CodeGluer] number of items selected: {n}")
+                        rejected: list[str] = []
                         for i in range(n):
                             gfile = files.get_item(i)
                             if gfile is None:
                                 continue
-                            name = gfile.get_basename()
-                            debug_print(f"[CodeGluer]   item {i}: {name!r}")
-                            if name:
-                                self._add_exclude_chip(name)
+                            ok, info = self._add_picked_path_as_chip(gfile)
+                            if ok:
+                                debug_print(f"[CodeGluer]   item {i}: accepted as {info!r}")
+                            else:
+                                rejected.append(info)
+                                debug_print(f"[CodeGluer]   item {i}: rejected ({info})")
+                        if rejected:
+                            summary = "\n".join(f"• {r}" for r in rejected[:10])
+                            if len(rejected) > 10:
+                                summary += f"\n… and {len(rejected) - 10} more."
+                            self._show_error_dialog(
+                                f"Rejected {len(rejected)} of {n} pick(s)",
+                                (
+                                    "Only files inside the selected directory "
+                                    "or zip can be excluded.\n\n" + summary
+                                ),
+                            )
                     except Exception as e:
                         import traceback
                         debug_print(traceback.format_exc())

@@ -1,5 +1,3 @@
-## `tests/test_codegluer_gui.py`
-
 """
 pytest suite for codegluer_gui logic. No GTK required.
 
@@ -313,3 +311,56 @@ def test_should_update_default_custom_false(tmp_path):
     assert cg.should_update_default("Glued_Code_custom.md", str(tmp_path)) is False
     assert cg.should_update_default("my_output.md", str(tmp_path)) is False
     assert cg.should_update_default("report.txt", str(tmp_path)) is False
+
+
+# ── Scope enforcement (moved from scope_selfcheck.py) ─────────────
+
+def test_scope_roots_only_captures_selected_dirs(tmp_path):
+    real_dir = tmp_path / "project"
+    real_dir.mkdir()
+    bare_file = tmp_path / "lonely.py"
+    bare_file.touch()
+    zip_file = tmp_path / "a.zip"
+    zip_file.write_bytes(b"PK")  # fake zip header
+
+    assert cg.compute_scope_roots([str(real_dir)]) == [str(real_dir.resolve())]
+    assert cg.compute_scope_roots([str(bare_file)]) == []
+    assert cg.compute_scope_roots([str(zip_file)]) == []
+    # Mixed: only the dir counts
+    assert cg.compute_scope_roots([str(real_dir), str(bare_file), str(zip_file)]) == [str(real_dir.resolve())]
+    # Dedup
+    assert cg.compute_scope_roots([str(real_dir), str(real_dir)]) == [str(real_dir.resolve())]
+
+
+def test_validate_rejects_absolute_and_traversal(tmp_path):
+    scope = [str(tmp_path)]
+    ok, _, err = cg.validate_exclude_pattern("/etc/passwd", scope)
+    assert not ok and "Absolute" in err
+    ok, _, err = cg.validate_exclude_pattern("../outside.txt", scope)
+    assert not ok and "outside" in err
+
+
+def test_validate_accepts_in_scope_patterns(tmp_path):
+    scope = [str(tmp_path)]
+    ok, p, _ = cg.validate_exclude_pattern("*.py", scope)
+    assert ok and p == "*.py"
+    ok, p, _ = cg.validate_exclude_pattern("sub/file.txt", scope)
+    assert ok and p == "sub/file.txt"
+
+
+def test_validate_empty_scope_rejects_slash_patterns():
+    ok, _, err = cg.validate_exclude_pattern("foo/bar.py", [])
+    assert not ok and "no browsable scope" in err
+    # Pure globs still work with empty scope
+    ok, p, _ = cg.validate_exclude_pattern("*.py", [])
+    assert ok and p == "*.py"
+
+
+def test_is_path_in_scope_prefix_trap(tmp_path):
+    foo = tmp_path / "foo"
+    foo.mkdir()
+    foobar = tmp_path / "foobar"
+    foobar.mkdir()
+    # /tmp/foobar/x must NOT match scope root /tmp/foo
+    assert not cg.is_path_in_scope(str(foobar / "x"), [str(foo)])
+    assert cg.is_path_in_scope(str(foo / "x"), [str(foo)])
