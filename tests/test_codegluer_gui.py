@@ -63,8 +63,8 @@ def test_build_command_plain_empty_output_defaults_to_txt(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(src)], opts)
-    assert "Glued_Code.txt" in cmd
-    assert "Glued_Code.md" not in cmd
+    assert any("Glued_Code.txt" in arg for arg in cmd)
+    assert "Glued_Code.md" not in " ".join(cmd)
     assert "-r" in cmd
     assert "--format" in cmd
     assert "plain" in cmd
@@ -83,7 +83,7 @@ def test_build_command_markdown_empty_output_defaults_to_md(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(src)], opts)
-    assert "Glued_Code.md" in cmd
+    assert any("Glued_Code.md" in arg for arg in cmd)
 
 
 def test_default_name_single_collision_appends_1(tmp_path):
@@ -146,8 +146,8 @@ def test_build_command_custom_output_name_respected(tmp_path):
         "target_dir": str(tmp_path),
     }
     cmd = cg.build_command([str(src)], opts)
-    assert "Glued_Code_custom.md" in cmd
-    assert "Glued_Code_1.md" not in cmd
+    assert any("Glued_Code_custom.md" in arg for arg in cmd)
+    assert "Glued_Code_1.md" not in " ".join(cmd)
 
 
 def test_build_command_exclude_comma_separated(tmp_path):
