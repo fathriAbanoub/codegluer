@@ -850,6 +850,18 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
                 d.connect("response", lambda *_: d.destroy())
                 d.present()
 
+        def _report_rejected_picks(self, rejected: list[str], n: int) -> None:
+            """Show a summary dialog for picks rejected by scope enforcement."""
+            if not rejected:
+                return
+            summary = "\n".join(f"• {r}" for r in rejected[:10])
+            if len(rejected) > 10:
+                summary += f"\n… and {len(rejected) - 10} more."
+            self._show_error_dialog(
+                f"Rejected {len(rejected)} of {n} pick(s)",
+                "Only files inside the selected directory or zip can be excluded.\n\n" + summary,
+            )
+
         def _try_open_file_dialog(self) -> bool:
             gtk_version = (Gtk.get_major_version(), Gtk.get_minor_version())
             if gtk_version < (4, 10):
@@ -918,18 +930,7 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
                 debug_print(traceback.format_exc())
                 self._show_error_dialog("Failed to process selected files", str(e))
                 return
-            if rejected:
-                # Tell the user which picks were thrown out and why.
-                summary = "\n".join(f"• {r}" for r in rejected[:10])
-                if len(rejected) > 10:
-                    summary += f"\n… and {len(rejected) - 10} more."
-                self._show_error_dialog(
-                    f"Rejected {len(rejected)} of {n} pick(s)",
-                    (
-                        "Only files inside the selected directory or zip "
-                        "can be excluded.\n\n" + summary
-                    ),
-                )
+            self._report_rejected_picks(rejected, n)
 
         def _open_file_chooser_dialog(self) -> None:
             dialog = Gtk.FileChooserNative.new(
@@ -983,17 +984,7 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
                             else:
                                 rejected.append(info)
                                 debug_print(f"[CodeGluer]   item {i}: rejected ({info})")
-                        if rejected:
-                            summary = "\n".join(f"• {r}" for r in rejected[:10])
-                            if len(rejected) > 10:
-                                summary += f"\n… and {len(rejected) - 10} more."
-                            self._show_error_dialog(
-                                f"Rejected {len(rejected)} of {n} pick(s)",
-                                (
-                                    "Only files inside the selected directory "
-                                    "or zip can be excluded.\n\n" + summary
-                                ),
-                            )
+                        self._report_rejected_picks(rejected, n)
                     except Exception as e:
                         import traceback
                         debug_print(traceback.format_exc())

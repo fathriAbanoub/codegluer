@@ -338,6 +338,9 @@ def test_validate_rejects_absolute_and_traversal(tmp_path):
     assert not ok and "Absolute" in err
     ok, _, err = cg.validate_exclude_pattern("../outside.txt", scope)
     assert not ok and "outside" in err
+    # Home‑path branch
+    ok, _, err = cg.validate_exclude_pattern("~/secret.txt", scope)
+    assert not ok and "Absolute" in err
 
 
 def test_validate_accepts_in_scope_patterns(tmp_path):
