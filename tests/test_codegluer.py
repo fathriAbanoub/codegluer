@@ -400,6 +400,7 @@ class TestAdvancedCollection:
         assert len(files) == 2
         assert {f.name for f in files} == {"main.py", "test.js"}
 
+    # ─── FIXED: skip_default_ignore_dirs=False to isolate gitignore anchoring ───
     def test_gitignore_respect_anchored(self, tmp_dir):
         (tmp_dir / ".gitignore").write_text("/build/\n")
         (tmp_dir / "build").mkdir()
@@ -410,7 +411,8 @@ class TestAdvancedCollection:
         (tmp_dir / "sub" / "build" / "keep.txt").write_text("keep me")
         
         files = codegluer.collect_files(
-            [str(tmp_dir)], recursive=True, respect_gitignore=True
+            [str(tmp_dir)], recursive=True, respect_gitignore=True,
+            skip_default_ignore_dirs=False,  # isolate gitignore-anchoring from the OOM-guard dir skip
         )
         
         file_names = {f.name for f in files}
