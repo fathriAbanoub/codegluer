@@ -6,6 +6,8 @@ Run: pytest tests/
 
 import os
 import pytest
+import datetime
+import re
 from pathlib import Path
 import codegluer_gui as cg
 
@@ -367,3 +369,67 @@ def test_is_path_in_scope_prefix_trap(tmp_path):
     # /tmp/foobar/x must NOT match scope root /tmp/foo
     assert not cg.is_path_in_scope(str(foobar / "x"), [str(foo)])
     assert cg.is_path_in_scope(str(foo / "x"), [str(foo)])
+
+
+# ── New timestamp tests ─────────────────────────────────────────────
+
+def _frozen_now(frozen):
+    class _DT:
+        @staticmethod
+        def now():
+            return frozen
+    return _DT
+
+
+def test_default_name_with_timestamp(tmp_path, monkeypatch):
+    """Timestamp flag should inject YYYYMMDD_HHMMSS into the default name."""
+    frozen = datetime.datetime(2026, 7, 10, 14, 30, 22)
+    monkeypatch.setattr(datetime, "datetime", _frozen_now(frozen))
+
+    name = cg.default_name(str(tmp_path), "markdown", include_timestamp=True)
+    assert name == "Glued_Code_20260710_143022.md"
+
+
+def test_default_name_with_timestamp_collision(tmp_path, monkeypatch):
+    """If a timestamped file exists, it should append _1, _2, etc."""
+    frozen = datetime.datetime(2026, 7, 10, 14, 30, 22)
+    monkeypatch.setattr(datetime, "datetime", _frozen_now(frozen))
+
+    (tmp_path / "Glued_Code_20260710_143022.md").touch()
+    name = cg.default_name(str(tmp_path), "markdown", include_timestamp=True)
+    assert name == "Glued_Code_20260710_143022_1.md"
+
+
+def test_should_update_default_recognizes_timestamped(tmp_path):
+    """A timestamped default in the entry must still be recognized as a
+    default — even though re-calling default_name() would produce a
+    different timestamp. This is the regression friend #1's patch had."""
+    assert cg.should_update_default("Glued_Code_20260710_143022.md", str(tmp_path)) is True
+    assert cg.should_update_default("Glued_Code_20260710_143022_1.md", str(tmp_path)) is True
+    # Sanity: custom names still rejected
+    assert cg.should_update_default("my_project.md", str(tmp_path)) is False
+    assert cg.should_update_default("Glued_Code_custom.md", str(tmp_path)) is False
+
+
+def test_build_command_with_timestamp_empty_output(tmp_path):
+    """If output is empty but timestamp is checked, build_command should
+    generate a timestamped name in the -o argument."""
+    src = tmp_path / "src"
+    src.mkdir()
+    opts = {
+        "format": "markdown",
+        "output": "",
+        "excludes": "",
+        "stats": False,
+        "estimate_tokens": False,
+        "any_dir": True,
+        "target_dir": str(tmp_path),
+        "include_timestamp": True,
+    }
+    cmd = cg.build_command([str(src)], opts)
+    try:
+        idx = cmd.index("-o")
+        out_path = cmd[idx + 1]
+    except ValueError:
+        assert False, "-o not in command"
+    assert re.search(r"Glued_Code_\d{8}_\d{6}\.md$", out_path)

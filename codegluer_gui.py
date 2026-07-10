@@ -20,6 +20,8 @@ import os
 import sys
 import subprocess
 import shutil
+import datetime
+import re
 from pathlib import Path
 
 # ----------------------------------------------------------------------
@@ -81,10 +83,18 @@ def _looks_heavy(path: str, scan_limit: int = 500) -> bool:
 # Pure logic: command builder. No GTK. Fully testable.
 # ──────────────────────────────────────────────────────────────────────
 
-def default_name(target_dir: str, fmt: str, existing: set | None = None) -> str:
-    """Collision-safe default filename. Glued_Code.md → Glued_Code_1.md → ..."""
+def default_name(target_dir: str, fmt: str, existing: set | None = None,
+                 include_timestamp: bool = False) -> str:
+    """Collision-safe default filename.
+        Glued_Code.md → Glued_Code_1.md → ...
+    With include_timestamp=True:
+        Glued_Code_YYYYMMDD_HHMMSS.md → Glued_Code_YYYYMMDD_HHMMSS_1.md → ...
+    """
     ext = "txt" if fmt == "plain" else "md"
     base = "Glued_Code"
+    if include_timestamp:
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = f"Glued_Code_{ts}"
     if existing is None:
         existing = set(os.listdir(target_dir)) if os.path.isdir(target_dir) else set()
     name = f"{base}.{ext}"
@@ -96,6 +106,39 @@ def default_name(target_dir: str, fmt: str, existing: set | None = None) -> str:
             name = f"{base}_{os.getpid()}.{ext}"
             break
     return name
+
+# Matches every default-name variant the GUI can produce:
+#   Glued_Code.md
+#   Glued_Code_1.md                      (collision suffix)
+#   Glued_Code_20260710_143022.md        (timestamp)
+#   Glued_Code_20260710_143022_1.md      (timestamp + collision suffix)
+#   Glued_Code_<pid>.md                  (pid fallback after 99 collisions)
+# …and the .txt variants.
+DEFAULT_NAME_RE = re.compile(
+    r"^Glued_Code"
+    r"(?:_\d{8}_\d{6})?"   # optional timestamp  _YYYYMMDD_HHMMSS
+    r"(?:_\d+)?"           # optional collision suffix or pid fallback  _N
+    r"\.(md|txt)$"
+)
+
+
+def should_update_default(current_text: str, target_dir: str) -> bool:
+    """True if the output field still holds a default value (or is empty),
+    meaning a format switch may safely update the extension. False if the
+    user typed a custom name that should be preserved.
+
+    Bare defaults are checked by exact match (they're deterministic).
+    Timestamped / collision-suffixed / pid-fallback defaults are checked
+    by regex, because re-calling default_name() would produce a different
+    timestamp and never exactly match the string already in the entry.
+    """
+    if current_text == "":
+        return True
+    default_md = default_name(target_dir, "markdown")
+    default_txt = default_name(target_dir, "plain")
+    if current_text in (default_md, default_txt):
+        return True
+    return bool(DEFAULT_NAME_RE.match(current_text))
 
 
 def is_any_dir(files: list[str]) -> bool:
@@ -268,16 +311,6 @@ def validate_exclude_pattern(pattern: str, scope_roots: list[str]) -> tuple[bool
     return True, raw, ""
 
 
-
-def should_update_default(current_text: str, target_dir: str) -> bool:
-    """True if the output field still holds a default value (or is empty),
-    meaning a format switch may safely update the extension. False if the
-    user typed a custom name that should be preserved."""
-    default_md = default_name(target_dir, "markdown")
-    default_txt = default_name(target_dir, "plain")
-    return current_text in (default_md, default_txt, "")
-
-
 def build_command(files: list[str], opts: dict) -> list[str]:
     """
     Build the codegluer CLI command from user options.
@@ -289,14 +322,16 @@ def build_command(files: list[str], opts: dict) -> list[str]:
         stats, estimate_tokens, tree, toc, respect_gitignore: bool
         any_dir: bool (precomputed, drives -r and dir-only flags)
         target_dir: str (where output lands)
+        include_timestamp: bool (add timestamp to default name)
     """
     any_dir = opts.get("any_dir", is_any_dir(files))
     target_dir = opts.get("target_dir") or target_dir_of(files)
 
     fmt = opts.get("format", "plain")
     output = opts.get("output", "").strip()
+    include_timestamp = opts.get("include_timestamp", False)
     if not output:
-        output = default_name(target_dir, fmt)
+        output = default_name(target_dir, fmt, include_timestamp=include_timestamp)
 
     cmd = ["codegluer", *files]
     cmd += ["--format", fmt]
@@ -457,6 +492,8 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
             self.target_dir = target_dir
             self.dry_run = dry_run
             self.current_theme = read_theme()
+            self.include_timestamp = False
+            self._suppress_changed = False
 
             # FIX (2026-07-09): operation scope — the set of directories
             # the exclude feature is allowed to operate on. Empty for
@@ -536,13 +573,27 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
 
             # Output filename
             grid.attach(Gtk.Label(label="Output filename:", halign=Gtk.Align.END), 0, row, 1, 1)
-            default = default_name(self.target_dir, self.format)
+
+            output_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            output_box.set_hexpand(True)
+
+            default = default_name(self.target_dir, self.format, include_timestamp=self.include_timestamp)
             self.output_entry = Gtk.Entry()
             self.output_entry.set_text(default)
             self.output_entry.set_hexpand(True)
             self.output_entry.connect("changed", self._on_output_changed)
             self._user_modified_output = False
-            grid.attach(self.output_entry, 1, row, 1, 1)
+            output_box.append(self.output_entry)
+
+            # Timestamp checkbox — when on, default name becomes Glued_Code_YYYYMMDD_HHMMSS.md
+            self.timestamp_cb = Gtk.CheckButton(label="Timestamp")
+            self.timestamp_cb.set_tooltip_text(
+                "Include date and time (YYYYMMDD_HHMMSS) in the default filename"
+            )
+            self.timestamp_cb.connect("toggled", self._on_timestamp_toggled)
+            output_box.append(self.timestamp_cb)
+
+            grid.attach(output_box, 1, row, 1, 1)
             row += 1
 
             # Exclude patterns — only show when directories or zips are selected
@@ -625,17 +676,35 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
                 self.checkboxes["respect_gitignore"] = Gtk.CheckButton(label="Respect .gitignore")
                 checks_box.append(self.checkboxes["respect_gitignore"])
 
+        def _set_output_text(self, text: str):
+            """Update entry text programmatically without tripping the
+            changed handler, then re-derive _user_modified_output from the
+            new text via should_update_default()."""
+            self._suppress_changed = True
+            self.output_entry.set_text(text)
+            self._suppress_changed = False
+            self._user_modified_output = not should_update_default(text, self.target_dir)
+
         def _on_output_changed(self, entry):
+            if self._suppress_changed:
+                return
             self._user_modified_output = not should_update_default(
                 entry.get_text(), self.target_dir
             )
+
+        def _on_timestamp_toggled(self, cb):
+            self.include_timestamp = cb.get_active()
+            if not self._user_modified_output:
+                self._set_output_text(
+                    default_name(self.target_dir, self.format, include_timestamp=self.include_timestamp)
+                )
 
         def _on_format_changed(self, dropdown, _param):
             selected = dropdown.get_selected()
             self.format = ["markdown", "plain"][selected]
             if not self._user_modified_output:
-                self.output_entry.set_text(
-                    default_name(self.target_dir, self.format)
+                self._set_output_text(
+                    default_name(self.target_dir, self.format, include_timestamp=self.include_timestamp)
                 )
             if self.format == "plain" and "toc" in self.checkboxes:
                 self.checkboxes["toc"].set_active(False)
@@ -681,6 +750,7 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
                 "estimate_tokens": self.checkboxes["estimate_tokens"].get_active(),
                 "any_dir": self.any_dir,
                 "target_dir": self.target_dir,
+                "include_timestamp": self.include_timestamp,
             }
             if self.any_dir:
                 opts["tree"] = self.checkboxes["tree"].get_active()
@@ -1005,12 +1075,21 @@ def run_gui(files: list[str], dry_run: bool = False) -> None:
                 self.close()
                 return
 
+            # Pull the actual -o argument the CLI was given. This was computed
+            # by build_command BEFORE the file was written, so it's guaranteed
+            # to match what hit disk. Never recompute default_name() here —
+            # the file now exists in target_dir and would shift the result.
+            try:
+                idx = cmd.index("-o")
+                actual_output = os.path.basename(cmd[idx + 1])
+            except (ValueError, IndexError):
+                actual_output = opts["output"] or "Glued_Code.md"
+
             save_theme(self.current_theme)
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
                 if result.returncode == 0:
-                    output_name = opts["output"] or default_name(self.target_dir, opts["format"])
-                    self._notify("CodeGluer", f"Created: {output_name}")
+                    self._notify("CodeGluer", f"Created: {actual_output}")
                 else:
                     self._notify("CodeGluer", f"Failed: {result.stderr.strip()}")
             except subprocess.TimeoutExpired:
