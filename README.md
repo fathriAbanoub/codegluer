@@ -18,7 +18,7 @@ Perfect for sharing code context with AI assistants, code reviews, documentation
 - 🗜️ **Zip Support** – Pass a `.zip` as an input path (CLI or GUI) and its contents are glued directly; GitHub-style zips with a single top-level folder are auto-unwrapped, with zip‑slip protection and a size guard against oversized archives.
 - 🎨 **Theme Support** – Choose from **auto** (follows system theme), **light**, **dark**, or **roselle**; persists across sessions.
 - 📂 **Directory Recursion** – Pass a folder and use `-r` to recursively grab all files inside.
-- 🛡️ **Safety Guards** – Recursive glues auto-skip common dependency/build folders (`node_modules`, `.git`, `dist`, `build`, `.venv`, `vendor`, and more — see [Safety & Performance Guards](#-safety--performance-guards)) and abort past a 20MB default size cap, both overridable via `--no-default-ignore` and `--max-size`.
+- 🛡️ **Safety Guards** – Recursive glues auto-skip common dependency/build folders (`node_modules`, `.git`, `dist`, `build`, `.venv`, `vendor`, and more — see [Safety & Performance Guards](#safety--performance-guards)) and abort past a 20MB default size cap, both overridable via `--no-default-ignore` and `--max-size`.
 - 🏷️ **Clear Markers** – Each file gets a `BEGIN FILE` / `END FILE` header and footer (Plain mode).
 - 📝 **Markdown Mode** – Output pasteable code blocks with syntax highlighting for AI/Notion workflows.
 - 🙈 **`.gitignore` Support** – Use `--respect-gitignore` to automatically exclude ignored files (anchored patterns like `/build/` are respected correctly, matching only at the `.gitignore`'s own level).
