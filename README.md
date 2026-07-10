@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/fathriAbanoub/codegluer)
+[![Version](https://img.shields.io/github/v/release/fathriAbanoub/codegluer)](https://github.com/fathriAbanoub/codegluer/releases)
 
 Glue multiple code files (and entire directories) into a single `.txt` or `.md` file.
 
@@ -12,14 +12,19 @@ Perfect for sharing code context with AI assistants, code reviews, documentation
 
 - 📁 **Select & Glue** – Select files in your file manager, right‑click, and glue them instantly.
 - 🖱️ **GTK4 GUI Dialog** – Native configuration window to set format, exclude patterns, and toggle options before gluing.
+- 🏷️ **Exclude Chips** – Exclude patterns show as removable tags, not a plain text field — type a pattern and press Enter, or pick paths visually with **Browse…**.
+- 🕐 **Timestamp Option** – Toggle a checkbox next to the output filename to include the current date and time (`YYYYMMDD_HHMMSS`) in the default name. Live-updates as you toggle, and respects custom names you've typed.
+- 🖱️ **Scoped Browse Button** – Browse opens anchored inside your selected folder (never your whole filesystem), and rejects picks outside it, absolute paths, `~` paths, and `..` escapes as likely mistakes.
+- 🗜️ **Zip Support** – Pass a `.zip` as an input path (CLI or GUI) and its contents are glued directly; GitHub-style zips with a single top-level folder are auto-unwrapped, with zip‑slip protection and a size guard against oversized archives.
 - 🎨 **Theme Support** – Choose from **auto** (follows system theme), **light**, **dark**, or **roselle**; persists across sessions.
 - 📂 **Directory Recursion** – Pass a folder and use `-r` to recursively grab all files inside.
+- 🛡️ **Safety Guards** – Recursive glues auto-skip common dependency/build folders (`node_modules`, `.git`, `dist`, `build`, `.venv`, `vendor`, and more — see [Safety & Performance Guards](#safety--performance-guards)) and abort past a 20MB default size cap, both overridable via `--no-default-ignore` and `--max-size`.
 - 🏷️ **Clear Markers** – Each file gets a `BEGIN FILE` / `END FILE` header and footer (Plain mode).
 - 📝 **Markdown Mode** – Output pasteable code blocks with syntax highlighting for AI/Notion workflows.
-- 🙈 **`.gitignore` Support** – Use `--respect-gitignore` to automatically exclude ignored files.
+- 🙈 **`.gitignore` Support** – Use `--respect-gitignore` to automatically exclude ignored files (anchored patterns like `/build/` are respected correctly, matching only at the `.gitignore`'s own level).
 - 🎯 **Smart Filtering** – Use `--include` and `--exclude` with advanced glob patterns (e.g., `--exclude "node_modules/**"`).
 - 🌳 **Tree Output** – Include a directory tree summary with `--tree` (use `--tree-depth` and `--tree-max-files` to limit).
-- 📊 **Stats & Token Estimates** – Show file counts, line counts, and token estimates (powered by `tiktoken` if installed).
+- 📊 **Stats & Token Estimates** – Show file counts, line counts, and token estimates (powered by `tiktoken` if installed). The estimate also categorises the total size into tiers (Small, Medium, Large, Very Large) for quick context‑window assessment.
 - 🔍 **Priority Order** – Control file ordering with `--priority` (glob patterns that appear first).
 - 🚫 **`.codegluerignore`** – Project‑specific ignore rules (same format as `.gitignore`).
 - 🔬 **Binary File Detection** – Skips files containing null bytes (binary) to avoid gluing garbage.
@@ -37,9 +42,13 @@ _When selecting files (directory-only options hidden):_
 
 ![GUI for files](screenshots/gui-roselle-files.png)
 
-_When selecting a directory (Tree, TOC, .gitignore appear):_
+_When selecting a directory (Tree, TOC, .gitignore, and the exclude-chip row with Browse… appear):_
 
 ![GUI for directory](screenshots/gui-roselle-directory.png)
+
+**Browse stays scoped to your project, even with `.git`/`node_modules` present:**
+
+![Browse dialog scoped to selected project folder](screenshots/browse-scoped.png)
 
 **Clean, pasteable output:**
 
@@ -54,7 +63,7 @@ Most context-prep tools are built for macOS or run in VS Code. CodeGluer is buil
 - **Native right-click integration** for Nautilus (GNOME) and Nemo (Cinnamon) — no terminal needed.
 - **GTK4 native GUI** – clean, fast, and fits your desktop theme.
 - **Pipe-friendly CLI** (`-o -`) for scripting and LLM piping workflows.
-- **One‑command install** via `pipx` with no Node.js, no npm, no config files.
+- **One‑command install** via `pipx` (or `pip --user` fallback) with no Node.js, no npm, and zero required configuration.
 
 If you live in a Linux file manager and want to send code to an AI without leaving your workflow, CodeGluer is the tool for that.
 
@@ -106,12 +115,15 @@ pip install -e .
    - **Nemo:** Right‑click → Nemo Actions → **CodeGluer**.
 4. A GTK4 configuration dialog appears where you can:
    - Choose output format (Markdown or Plain)
-   - Set exclude patterns (comma‑separated)
-   - Toggle options (Stats, Token estimate, Tree, TOC, Respect .gitignore)
+   - Set exclude patterns as removable **chips** — type a pattern and press <kbd>Enter</kbd>, or click **Browse…** to pick files/folders visually
+   - Toggle options (Stats, Token estimate, Tree, TOC, Respect .gitignore) — these dir‑only options only appear when a folder or zip is selected
+   - Optionally check **Timestamp** to include the current date/time in the default filename (e.g., `Glued_Code_20260710_143022.md`)
    - Change the theme (auto/light/dark/roselle)
 5. Click **Glue!** – a notification will inform you of success or failure.
 
-_💡 Smart GUI: If you select a folder, the tool automatically applies the `-r` (recursive) flag._
+_💡 Smart GUI: If you select a folder, the tool automatically applies the `-r` (recursive) flag. Selecting a `.zip` behaves the same way — its contents are glued as if you'd selected the extracted folder._
+
+**About the Browse button:** it opens scoped to whatever you selected — it won't let you wander off and exclude something outside your selection, and it rejects absolute paths, `~` paths, and `..` escapes as likely mistakes rather than silently accepting them. If you selected a `.zip`, Browse is disabled (the GUI can't see inside a zip until the CLI extracts it) — an inline note tells you to type exclude patterns manually instead (e.g. `node_modules`, `*.log`).
 
 ## 💻 Usage (Terminal)
 
@@ -142,6 +154,35 @@ codegluer src/ -r --format markdown -o - | llm "explain this codebase"
 
 # Use a custom AI prompt from a file (prepended at the top)
 codegluer src/ -r --ai-prompt-file context.txt -o output.md
+
+# Glue a downloaded GitHub zip directly (auto-unwraps the repo-main/ wrapper folder)
+codegluer repo-main.zip -r --format markdown -o repo_dump.md
+
+# Recursively glue a folder that legitimately has a subfolder named "vendor" or "build"
+# (skip the default ignore list entirely)
+codegluer src/ -r --no-default-ignore
+
+# Raise (or disable) the 20MB default size cap for a large recursive glue
+codegluer src/ -r --max-size 50    # 50MB cap
+codegluer src/ -r --max-size 0     # no cap
+
+# Show version
+codegluer --version
+
+# Include a Table of Contents (markdown only)
+codegluer src/ -r --format markdown --toc -o project.md
+
+# Show project statistics (files, lines, languages)
+codegluer src/ -r --stats -o project.md
+
+# Estimate token count with context-size tier
+codegluer src/ -r --estimate-tokens -o project.md
+
+# Add a custom AI prompt directly (not from file)
+codegluer src/ -r --ai-prompt "Analyze this code for security issues" -o project.md
+
+# Limit tree display to 5 items per directory (default is 10)
+codegluer src/ -r --tree --tree-max-files 5 -o project.md
 ```
 
 ## 🖥️ GUI from Terminal
@@ -160,16 +201,36 @@ This opens the same GTK4 dialog, letting you configure options and glue files in
 
 > **Note:** The `codegluer-gui` command is installed by `install.sh` alongside the Python package. It is **not** a separate entry point in `pyproject.toml`; it is a standalone script placed in `~/.local/bin/` during installation.
 
+For debugging GTK issues, you can enable verbose logging by setting the environment variable `CODEGLUER_DEBUG=1` before launching the GUI. This prints detailed traces to stderr, which is invaluable when reporting problems.
+
 ## 🧠 Smart CLI Behaviors
 
 - **Auto‑Timestamping:** For the default output (when no `--output` is specified), if the default output file already exists, CodeGluer appends a timestamp with microseconds to prevent overwrites. When you explicitly provide an output path with `--output` or `-o`, any existing file at that path will be overwritten without timestamp protection.
 - **Graceful Degradation:** Missing or unreadable files are skipped with a warning; the tool glues the remaining files without crashing.
 - **Space & Unicode Safe:** Handles filenames with spaces, parentheses, and special characters flawlessly.
 - **Relative Display Names:** When recursing, files are labelled with their relative paths (e.g., `src/utils.py`) to avoid filename collisions.
-- **`--ai-prompt` / `--ai-prompt-file`:** Prepend a custom text block before the code sections. Useful for adding instructions, project context, or a description that an AI assistant will see at the top of the file.
+- **`--ai-prompt` / `--ai-prompt-file`:** Prepend a custom text block before the code sections. The block is wrapped in `<system_context>...</system_context>` XML tags to help LLMs distinguish instructions from code. Useful for adding instructions, project context, or a description that an AI assistant will see at the top of the file.
 - **Binary File Detection:** Files containing null bytes (i.e., binary files) are automatically skipped to prevent corrupting the output.
 - **`.codegluerignore`:** Project‑specific ignore rules can be placed in a `.codegluerignore` file (same syntax as `.gitignore`).
-- **Exclude Validation (GUI):** If you enter patterns with spaces but no commas (e.g., `*.py *.js`), the GUI will prompt you to fix them (GTK 4.10+) or auto‑correct them to `*.py,*.js` (older GTK). This prevents common mistakes.
+- **Zip Auto‑Unwrap:** A zip with a single top‑level folder (e.g. a GitHub `repo-main.zip`) is unwrapped so the tree shows `src/app.py`, not `repo-main/src/app.py`.
+- **Anchored `.gitignore` Rules:** A pattern like `/build/` in a `.gitignore` only matches at that file's own directory level, matching real Git semantics — it won't accidentally exclude an unrelated `sub/build/` elsewhere in the tree.
+
+## ⚠️ Known Limitations
+
+- **Mixed zip + non-zip inputs:** Using `codegluer foo.zip bar/` produces weird display names because the expanded zip path and other paths have distant common ancestors. Extract zips manually if you need to mix them with other paths.
+- **Naive zip unwrap:** Zips with a single top-level folder are always unwrapped. If a zip legitimately has one top-level dir that _is_ the project structure, it still gets unwrapped. This is fine for GitHub zips but may not be ideal for all cases.
+- **Zip size guard:** The size guard checks declared uncompressed size before extraction, which prevents accidental-large inputs but is NOT a defense against adversarial zip-bombs (attackers can lie about sizes).
+
+## 🛡️ Safety & Performance Guards
+
+Recursive glues (`-r`) on real-world projects can otherwise choke on dependency/build folders — CodeGluer guards against that by default:
+
+- **Default‑ignored directory names** (skipped automatically during `-r`, regardless of depth): `node_modules`, `.git`, `.next`, `.nuxt`, `dist`, `build`, `__pycache__`, `.venv`, `venv`, `target`, `.cache`, `.pytest_cache`, `vendor`, `.turbo`. Disable entirely with `--no-default-ignore` if you genuinely need to glue inside one of these on purpose.
+- **20MB default size cap** on total glued content, aborting _before_ the offending file is appended rather than after. Adjust with `--max-size <MB>`, or `--max-size 0` to disable.
+- **Zip extraction guards** — oversized zips are rejected before extraction (same `--max-size` cap), and zip‑slip (path traversal via crafted zip entries) is blocked.
+- **GUI Browse button** uses a separate, lighter heuristic to avoid pointing its file picker at something that would freeze GTK while thumbnailing (a huge flat directory, or a picker pointed directly _at_ a folder like `node_modules`) — it does not affect what gets glued, only where the picker opens.
+
+The GUI is built on GTK4 and gracefully falls back to `FileChooserNative` when running on older GTK4 versions, ensuring a consistent experience across distributions.
 
 ## 📄 Output Format
 
@@ -257,9 +318,6 @@ sequenceDiagram
 
     User->>GUI: Click "Glue!"
     GUI->>GUI: Collect options, validate excludes
-    alt Excludes have spaces but no commas
-        GUI->>GUI: Show dialog (GTK 4.10+) or auto-fix
-    end
     GUI->>Logic: build_command(files, opts)
     Logic-->>GUI: CLI argument list
     GUI->>GUI: save_theme(current_theme)

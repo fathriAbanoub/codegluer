@@ -1,5 +1,5 @@
 """CodeGluer - Glue multiple code files into a single document."""
-__version__ = '1.0.0'
+__version__ = '1.1.0'
 
 from .core import (
     SEPARATOR_CHAR,
