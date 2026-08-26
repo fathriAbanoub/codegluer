@@ -1,3 +1,5 @@
+
+
 # 📦 CodeGluer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
@@ -292,6 +294,7 @@ codegluer/
 │   └── cli.py                   # Command-line interface
 └── tests/                       # Pytest test suite
     ├── conftest.py
+    ├── test_ai_context.py       # AI context feature tests
     ├── test_codegluer.py        # Core logic tests
     └── test_codegluer_gui.py    # GUI logic tests (no GTK display required)
 ```
